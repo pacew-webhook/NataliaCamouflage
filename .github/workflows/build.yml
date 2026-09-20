@@ -1,15 +1,16 @@
-name: Build Android APK - Release Direct
+name: Build Android APK - ZIP Artifact
 
 on:
   workflow_dispatch:
+  push:
+    branches: ["**"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -20,7 +21,7 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Gradle
+      - name: Setup Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.10.2"
@@ -28,56 +29,22 @@ jobs:
       - name: Build Debug APK
         run: gradle --no-daemon assembleDebug
 
-      - name: Verify APK exists and is valid
+      - name: Verify APK before packaging
         shell: bash
         run: |
           set -euo pipefail
           APK="app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK tidak ditemukan: $APK"
-            exit 1
-          fi
-
-          echo "APK ditemukan: $APK"
-          ls -lh "$APK"
-
-          echo "Memeriksa struktur APK..."
+          test -s "$APK"
           unzip -t "$APK" >/dev/null
-          echo "APK ZIP integrity: OK"
-
           if command -v apksigner >/dev/null 2>&1; then
-            echo "Memeriksa signature APK..."
             apksigner verify --verbose "$APK"
-          else
-            echo "apksigner tidak tersedia; pemeriksaan signature dilewati."
           fi
+          echo "APK verified: $(du -h "$APK" | cut -f1)"
 
-      - name: Create GitHub Release and upload APK directly
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-          TAG="v1.1-build-${{ github.run_number }}"
-          ASSET="NataliaCamouflage-v1.1-debug.apk"
-
-          echo "Membuat release: $TAG"
-          gh release create "$TAG" \
-            "$APK#$ASSET" \
-            --title "NataliaCamouflage v1.1 Build ${{ github.run_number }}" \
-            --notes "Direct APK release. CameraX 1.5.3 / compileSdk 35." \
-            --target "${{ github.sha }}"
-
-          echo "Release berhasil dibuat. APK tersedia sebagai asset langsung: $ASSET"
-
-      - name: Confirm release asset
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG="v1.1-build-${{ github.run_number }}"
-          gh release view "$TAG" --json name,tagName,assets
+      - name: Upload APK as downloadable ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NataliaCamouflage-v1.2-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
