@@ -102,7 +102,7 @@ class CaptureService : Service() {
                 if (d.camouflage != camouflage) {
                     // Only the small UI update returns to the main thread.
                     Handler(Looper.getMainLooper()).post {
-                        if (!isDestroyed) setCamo(d.camouflage)
+                        setCamo(d.camouflage)
                     }
                 }
             } catch (_: Throwable) {
