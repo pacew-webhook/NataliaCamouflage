@@ -20,13 +20,23 @@ class CaptureService : Service() {
     private var overlay: TextView? = null
     private var wm: WindowManager? = null
     private val camo = AtomicBoolean(false)
+    private var frameCounter = 0L
+    private var fpsWindowStart = System.nanoTime()
 
     companion object {
         const val ACTION_START = "com.example.nataliacamo.START"
         const val ACTION_STOP = "com.example.nataliacamo.STOP"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_DATA = "data"
-        @Volatile var isRunning: Boolean = false
+        @Volatile var isRunning = false
+            private set
+        @Volatile var frameCount = 0L
+            private set
+        @Volatile var fps = 0.0
+            private set
+        @Volatile var captureWidth = 0
+            private set
+        @Volatile var captureHeight = 0
             private set
         @Volatile private var instance: CaptureService? = null
         fun setDemoCamouflage(on: Boolean) { instance?.setCamouflage(on) }
@@ -56,16 +66,47 @@ class CaptureService : Service() {
         val code = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
         val data = intent.parcelableIntent(EXTRA_DATA)
         if (code != Activity.RESULT_OK || data == null) { stopSelf(); return }
+
         val manager = getSystemService(MediaProjectionManager::class.java)
         projection = manager.getMediaProjection(code, data)
         projection?.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
+
         val metrics = resources.displayMetrics
-        reader = ImageReader.newInstance(metrics.widthPixels, metrics.heightPixels, PixelFormat.RGBA_8888, 2)
-        reader?.setOnImageAvailableListener({ r -> r.acquireLatestImage()?.close() }, Handler(Looper.getMainLooper()))
+        captureWidth = metrics.widthPixels
+        captureHeight = metrics.heightPixels
+        frameCounter = 0L
+        frameCount = 0L
+        fps = 0.0
+        fpsWindowStart = System.nanoTime()
+
+        reader = ImageReader.newInstance(captureWidth, captureHeight, PixelFormat.RGBA_8888, 2)
+        reader?.setOnImageAvailableListener({ r ->
+            val image = r.acquireLatestImage()
+            if (image != null) {
+                frameCounter++
+                frameCount = frameCounter
+                val now = System.nanoTime()
+                val elapsed = (now - fpsWindowStart) / 1_000_000_000.0
+                if (elapsed >= 1.0) {
+                    fps = frameCounter / elapsed
+                    frameCounter = 0L
+                    fpsWindowStart = now
+                }
+                image.close()
+            }
+        }, Handler(Looper.getMainLooper()))
+
         virtualDisplay = projection?.createVirtualDisplay(
-            "NataliaPrototype", metrics.widthPixels, metrics.heightPixels, metrics.densityDpi,
-            0, reader!!.surface, null, null
+            "NataliaPrototype",
+            captureWidth,
+            captureHeight,
+            metrics.densityDpi,
+            0,
+            reader!!.surface,
+            null,
+            null
         )
+
         createOverlayIfNeeded()
         isRunning = true
     }
@@ -106,6 +147,9 @@ class CaptureService : Service() {
         projection = null
         setCamouflage(false)
         isRunning = false
+        captureWidth = 0
+        captureHeight = 0
+        fps = 0.0
     }
 
     private fun stopCaptureAndService() { stopCaptureOnly(); stopSelf() }
@@ -124,7 +168,9 @@ class CaptureService : Service() {
     override fun onDestroy() {
         stopCaptureOnly()
         overlay?.let { try { wm?.removeView(it) } catch (_: Exception) {} }
-        overlay = null; wm = null; instance = null
+        overlay = null
+        wm = null
+        instance = null
         super.onDestroy()
     }
 
@@ -133,5 +179,7 @@ class CaptureService : Service() {
     @Suppress("DEPRECATION")
     private fun Intent.parcelableIntent(key: String): Intent? = if (Build.VERSION.SDK_INT >= 33) {
         getParcelableExtra(key, Intent::class.java)
-    } else getParcelableExtra(key)
+    } else {
+        getParcelableExtra(key)
+    }
 }
