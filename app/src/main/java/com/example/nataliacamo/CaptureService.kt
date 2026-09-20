@@ -17,7 +17,7 @@ class CaptureService : Service() {
     private var display: android.hardware.display.VirtualDisplay? = null
     private var overlay: TextView? = null
     private var wm: WindowManager? = null
-    private val detector: CamouflageDetector by lazy { CamouflageDetector(applicationContext) }
+    private var detector: CamouflageDetector? = null
     private val camo = AtomicBoolean(false)
     private val processing = AtomicBoolean(false)
     private var captureThread: HandlerThread? = null
@@ -39,7 +39,6 @@ class CaptureService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        detector
         channel()
         startForeground(7, notification())
     }
@@ -63,6 +62,13 @@ class CaptureService : Service() {
             i.getParcelableExtra(DATA)
         }
         if (code != Activity.RESULT_OK || data == null) {
+            stopSelf()
+            return
+        }
+
+        val activeDetector = try {
+            detector ?: CamouflageDetector(applicationContext).also { detector = it }
+        } catch (_: Throwable) {
             stopSelf()
             return
         }
@@ -98,7 +104,7 @@ class CaptureService : Service() {
             }
 
             try {
-                val d = detector.process(image)
+                val d = activeDetector.process(image)
                 if (d.camouflage != camouflage) {
                     // Only the small UI update returns to the main thread.
                     Handler(Looper.getMainLooper()).post {
@@ -193,7 +199,8 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         stopCapture()
-        detector.close()
+        try { detector?.close() } catch (_: Exception) {}
+        detector = null
         overlay?.let { try { wm?.removeView(it) } catch (_: Exception) {} }
         instance = null
         super.onDestroy()
