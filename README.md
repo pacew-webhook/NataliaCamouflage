@@ -1,22 +1,7 @@
-# Natalia Camouflage Prototype v0.4
+# Natalia Camouflage v0.9
 
-Tahap v0.4 memverifikasi bahwa MediaProjection benar-benar menerima frame layar.
+Prototype gabungan Screen Capture → frame processing → temporal detector → overlay.
 
-## Baru di v0.4
-- Frame counter.
-- Estimasi FPS capture.
-- Resolusi capture.
-- Tetap mempertahankan demo overlay CAMOUFLAGE.
-- Tidak menyimpan frame ke file dan belum melakukan deteksi AI.
+**Catatan penting:** detector di `CamouflageDetector.kt` adalah heuristik placeholder, bukan model AI yang telah dilatih khusus untuk Natalia. Tujuannya menguji pipeline dan state machine. Untuk deteksi Natalia/Camouflage nyata, tahap berikutnya mengganti detector dengan model/fitur visual berdasarkan screenshot/video referensi.
 
-## Uji
-1. Izinkan Overlay.
-2. Mulai Screen Capture.
-3. Buka Mobile Legends atau aplikasi lain.
-4. Kembali ke Natalia Camouflage.
-5. Lihat Frame, FPS, dan Resolusi.
-
-Target normal: Frame bertambah dan FPS > 0 saat layar aktif.
-
-## Tahap berikutnya
-v0.5: mengambil sebagian frame untuk preview/debug dan menyiapkan ROI area Mobile Legends.
+Build GitHub Actions: JDK 17, Gradle 8.10.2, AGP 8.7.3, Kotlin 2.0.21.
