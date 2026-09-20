@@ -1,11 +1,13 @@
-# Natalia Camouflage — Final 1.0
+# Natalia Camouflage v1.1 – Live Camera Camouflage
 
-Android final-project foundation for realtime Natalia camouflage detection.
+Based on v1.0 STARTUP-STABILITY-FIX.
 
-The capture, temporal state machine, overlay and TFLite dependency are included.
-The bundled detector remains a fallback visual heuristic until a trained
-Natalia-vs-Camouflage model is supplied. Replace the classifier section in
-`CamouflageDetector.kt` with the trained TFLite model; do not treat the
-fallback heuristic as proof of gameplay recognition.
+## New behavior
+- The app continues detecting Natalia camouflage from the game screen with `natalia_camouflage.tflite`.
+- When AI state is `CAMOUFLAGE`, a front-camera overlay activates a person-segmentation effect.
+- The camera background remains visible while the detected person area is covered with a camouflage pattern.
+- When AI returns to `NORMAL`, the camera returns to the normal preview.
+- CameraX + ML Kit Selfie Segmentation are used for the live camera effect.
 
-Build: JDK 17, Gradle 8.10.2, AGP 8.7.3, Kotlin 2.0.21.
+## Important
+The camera overlay is an Android screen overlay. Whether a particular live/streaming app includes Android overlays in its broadcast depends on how that app captures the screen/camera. The game detector itself remains independent of the camera segmenter.
