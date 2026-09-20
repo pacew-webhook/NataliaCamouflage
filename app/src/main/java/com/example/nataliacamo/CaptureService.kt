@@ -17,7 +17,7 @@ class CaptureService:Service(){
     private var display:android.hardware.display.VirtualDisplay?=null
     private var overlay:TextView?=null
     private var wm:WindowManager?=null
-    private val detector=CamouflageDetector()
+    private val detector: CamouflageDetector by lazy { CamouflageDetector(applicationContext) }
     private val camo=AtomicBoolean(false)
     companion object{
         const val START="START"; const val STOP="STOP"; const val CODE="code"; const val DATA="data"
@@ -26,7 +26,7 @@ class CaptureService:Service(){
         private var instance:CaptureService?=null
         fun demo(v:Boolean){instance?.setCamo(v)}
     }
-    override fun onCreate(){super.onCreate();instance=this;channel();startForeground(7,notification())}
+    override fun onCreate(){super.onCreate();instance=this;detector;channel();startForeground(7,notification())}
     override fun onStartCommand(i:Intent?,f:Int,id:Int):Int{
         when(i?.action){START->startCapture(i);STOP->stopAll()}
         return START_NOT_STICKY
@@ -60,6 +60,6 @@ class CaptureService:Service(){
     private fun stopAll(){stopCapture();stopSelf()}
     private fun channel(){getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel("final","Natalia Final",NotificationManager.IMPORTANCE_LOW))}
     private fun notification()=Notification.Builder(this,"final").setContentTitle("Natalia Camouflage Final").setContentText("Detector aktif").setSmallIcon(android.R.drawable.ic_menu_view).build()
-    override fun onDestroy(){stopCapture();overlay?.let{try{wm?.removeView(it)}catch(_:Exception){}};instance=null;super.onDestroy()}
+    override fun onDestroy(){stopCapture();detector.close();overlay?.let{try{wm?.removeView(it)}catch(_:Exception){}};instance=null;super.onDestroy()}
     override fun onBind(i:Intent?)=null
 }
