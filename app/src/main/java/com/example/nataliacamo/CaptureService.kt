@@ -56,7 +56,7 @@ class CaptureService:Service(){
         try{wm?.addView(overlay,p)}catch(_:Exception){}
     }
     private fun setCamo(v:Boolean){camo.set(v);camouflage=v;overlay?.animate()?.alpha(if(v)1f else 0f)?.setDuration(160)?.start()}
-    private fun stopCapture(){try{display?.release()}catch(_:Exception){};display=null;try{reader?.close()}catch(_:Exception){};reader=null;try{projection?.stop()}catch(_:Exception){};projection=null;detector.reset();setCamo(false);running=false}
+    private fun stopCapture(){try{display?.release()}catch(_:Exception){};display=null;try{reader?.close()}catch(_:Exception){};reader=null;try{projection?.stop()}catch(_:Exception){};projection=null;setCamo(false);running=false}
     private fun stopAll(){stopCapture();stopSelf()}
     private fun channel(){getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel("final","Natalia Final",NotificationManager.IMPORTANCE_LOW))}
     private fun notification()=Notification.Builder(this,"final").setContentTitle("Natalia Camouflage Final").setContentText("Detector aktif").setSmallIcon(android.R.drawable.ic_menu_view).build()
