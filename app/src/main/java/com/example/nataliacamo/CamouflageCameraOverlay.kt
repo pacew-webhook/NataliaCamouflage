@@ -75,19 +75,24 @@ class CamouflageCameraOverlay(context: Context) : android.widget.FrameLayout(con
                         return@setAnalyzer
                     }
                     analyzing = true
-                    val image = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
-                    segmenter?.process(image)
-                        ?.addOnSuccessListener(executor) { mask ->
+                    try {
+                        val image = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
+                        val task = segmenter?.process(image)
+                        if (task == null) {
+                            analyzing = false
+                            proxy.close()
+                            return@setAnalyzer
+                        }
+                        task.addOnSuccessListener(executor) { mask ->
                             maskView.setMask(mask)
-                        }
-                        ?.addOnCompleteListener {
+                        }.addOnCompleteListener(executor) {
                             analyzing = false
                             proxy.close()
                         }
-                        ?: run {
-                            analyzing = false
-                            proxy.close()
-                        }
+                    } catch (_: Throwable) {
+                        analyzing = false
+                        proxy.close()
+                    }
                 }
                 p.unbindAll()
                 p.bindToLifecycle(context as androidx.lifecycle.LifecycleOwner, selector, previewUseCase, analysis)
@@ -111,6 +116,10 @@ private class CamouflageMaskView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : View(context, attrs) {
+    // ML Kit delivers masks from the analyzer executor. Never recycle the
+    // bitmap currently being drawn from that background thread. Instead, queue
+    // the newest bitmap and swap/recycle it on the View's UI thread in onDraw.
+    @Volatile private var pendingMask: Bitmap? = null
     private var mask: Bitmap? = null
     private var active = false
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -150,19 +159,30 @@ private class CamouflageMaskView @JvmOverloads constructor(
             pixels[i] = (a shl 24)
         }
         out.setPixels(pixels, 0, w, 0, 0, w, h)
-        mask?.recycle()
-        mask = out
-        invalidate()
+        val previousPending = pendingMask
+        pendingMask = out
+        previousPending?.recycle()
+        postInvalidateOnAnimation()
     }
 
     fun clearMask() {
-        mask?.recycle()
-        mask = null
-        invalidate()
+        post {
+            pendingMask?.recycle()
+            pendingMask = null
+            mask?.recycle()
+            mask = null
+            invalidate()
+        }
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        pendingMask?.let { next ->
+            pendingMask = null
+            val old = mask
+            mask = next
+            old?.recycle()
+        }
         if (!active) return
         val m = mask ?: return
         val layer = canvas.saveLayer(0f, 0f, width.toFloat(), height.toFloat(), null)

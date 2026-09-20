@@ -50,7 +50,11 @@ class CaptureService : Service(), LifecycleOwner {
         instance = this
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         channel()
-        startForeground(7, notification())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(7, notification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        } else {
+            startForeground(7, notification())
+        }
     }
 
     override fun onStartCommand(i: Intent?, f: Int, id: Int): Int {
@@ -245,7 +249,9 @@ class CaptureService : Service(), LifecycleOwner {
         overlayContainer?.let { try { wm?.removeView(it) } catch (_: Exception) {} }
         overlayContainer = null
         overlay = null
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+        if (lifecycleRegistry.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+        }
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         instance = null
         super.onDestroy()
