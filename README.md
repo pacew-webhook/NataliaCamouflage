@@ -1,7 +1,29 @@
-# Natalia Camouflage v0.9
+# Natalia Camouflage Final 1.0
 
-Prototype gabungan Screen Capture → frame processing → temporal detector → overlay.
+Android prototype/final architecture for detecting a persistent visual transition on a Mobile Legends screen and triggering a CAMOUFLAGE overlay.
 
-**Catatan penting:** detector di `CamouflageDetector.kt` adalah heuristik placeholder, bukan model AI yang telah dilatih khusus untuk Natalia. Tujuannya menguji pipeline dan state machine. Untuk deteksi Natalia/Camouflage nyata, tahap berikutnya mengganti detector dengan model/fitur visual berdasarkan screenshot/video referensi.
+## Pipeline
 
-Build GitHub Actions: JDK 17, Gradle 8.10.2, AGP 8.7.3, Kotlin 2.0.21.
+MediaProjection → ImageReader → ROI feature extraction → temporal validation → camouflage state → overlay.
+
+## Important accuracy note
+
+This package does **not** contain a trained Natalia AI model. The included detector is a model-free visual transition detector with an explicit `FrameDetector` interface. It is useful for the complete capture/state pipeline, but it must not be represented as a guaranteed Natalia/Camouflage classifier.
+
+To make recognition game-character-specific, add a trained TFLite/ONNX model implementing the same detector contract and train/validate it with real Natalia NORMAL and CAMOUFLAGE frames.
+
+## Build
+
+GitHub Actions uses JDK 17, Gradle 8.10.2, Android Gradle Plugin 8.7.3 and Kotlin 2.0.21.
+
+## Runtime
+
+1. Install APK.
+2. Grant overlay permission.
+3. Start Screen Capture.
+4. Keep the game visible.
+5. The detector learns a short NORMAL baseline and then validates persistent visual changes across multiple frames.
+
+## Future model integration
+
+Replace `CamouflageDetector` with a model-backed implementation of `FrameDetector`. `CaptureService` does not need to know whether the detector is heuristic, TFLite, or another inference engine.
