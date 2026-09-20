@@ -7,10 +7,21 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.*
+import android.content.pm.PackageManager
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 
 class MainActivity : ComponentActivity() {
+    private var pendingCapture = false
+    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted && pendingCapture) {
+            pendingCapture = false
+            launchScreenCapture()
+        } else if (!granted) {
+            pendingCapture = false
+            status.text = "Izin kamera diperlukan untuk efek camouflage"
+        }
+    }
     private lateinit var status: TextView
     private lateinit var detector: TextView
     private val capture = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
@@ -43,6 +54,15 @@ class MainActivity : ComponentActivity() {
     override fun onResume(){super.onResume();refresh()}
     private fun startCapture(){
         if(!Settings.canDrawOverlays(this)){ status.text="Allow overlay first"; return }
+        if (androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            pendingCapture = true
+            cameraPermission.launch(android.Manifest.permission.CAMERA)
+            return
+        }
+        launchScreenCapture()
+    }
+
+    private fun launchScreenCapture() {
         val m=getSystemService(MediaProjectionManager::class.java)
         capture.launch(m.createScreenCaptureIntent())
     }

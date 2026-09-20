@@ -2,6 +2,7 @@ package com.example.nataliacamo
 
 import android.app.*
 import android.content.*
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.media.ImageReader
 import android.media.projection.MediaProjection
@@ -9,13 +10,21 @@ import android.media.projection.MediaProjectionManager
 import android.os.*
 import android.view.*
 import android.widget.TextView
+import android.widget.FrameLayout
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import java.util.concurrent.atomic.AtomicBoolean
 
-class CaptureService : Service() {
+class CaptureService : Service(), LifecycleOwner {
+    private val lifecycleRegistry = LifecycleRegistry(this)
+    override val lifecycle: Lifecycle get() = lifecycleRegistry
     private var projection: MediaProjection? = null
     private var reader: ImageReader? = null
     private var display: android.hardware.display.VirtualDisplay? = null
     private var overlay: TextView? = null
+    private var overlayContainer: FrameLayout? = null
+    private var cameraOverlay: CamouflageCameraOverlay? = null
     private var wm: WindowManager? = null
     private var detector: CamouflageDetector? = null
     private val camo = AtomicBoolean(false)
@@ -39,13 +48,17 @@ class CaptureService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         channel()
         startForeground(7, notification())
     }
 
     override fun onStartCommand(i: Intent?, f: Int, id: Int): Int {
         when (i?.action) {
-            START -> startCapture(i)
+            START -> {
+                lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+                startCapture(i)
+            }
             STOP -> stopAll()
         }
         return START_NOT_STICKY
@@ -135,33 +148,56 @@ class CaptureService : Service() {
     }
 
     private fun makeOverlay() {
-        if (overlay != null) return
+        if (overlayContainer != null) return
+        if (!android.provider.Settings.canDrawOverlays(this)) return
+
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        overlay = TextView(this).apply {
-            text = "CAMOUFLAGE"
-            textSize = 24f
-            setTextColor(0xffffffff.toInt())
-            setBackgroundColor(0x66000000)
-            setPadding(24, 14, 24, 14)
-            alpha = 0f
+        val container = FrameLayout(this)
+        val camera = CamouflageCameraOverlay(this)
+        cameraOverlay = camera
+        container.addView(camera, FrameLayout.LayoutParams(-1, -1))
+
+        val label = TextView(this).apply {
+            text = "CAMOUFLAGE: OFF"
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(0x88000000.toInt())
+            setPadding(12, 8, 12, 8)
         }
+        val labelParams = FrameLayout.LayoutParams(-2, -2).apply {
+            gravity = Gravity.TOP or Gravity.START
+        }
+        container.addView(label, labelParams)
+        overlay = label
+        overlayContainer = container
+
         val p = WindowManager.LayoutParams(
-            -2,
-            -2,
+            360,
+            270,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            gravity = Gravity.TOP or Gravity.END
+            x = 18
             y = 120
         }
-        try { wm?.addView(overlay, p) } catch (_: Exception) {}
+        try {
+            wm?.addView(container, p)
+            camera.start()
+        } catch (_: Throwable) {
+            cameraOverlay?.stop()
+            cameraOverlay = null
+            overlayContainer = null
+            overlay = null
+        }
     }
 
     private fun setCamo(v: Boolean) {
         camo.set(v)
         camouflage = v
-        overlay?.animate()?.alpha(if (v) 1f else 0f)?.setDuration(160)?.start()
+        cameraOverlay?.setCamouflage(v)
+        overlay?.text = if (v) "CAMOUFLAGE: ON" else "CAMOUFLAGE: OFF"
     }
 
     private fun stopCapture() {
@@ -175,6 +211,11 @@ class CaptureService : Service() {
         captureThread?.quitSafely()
         captureThread = null
         captureHandler = null
+        cameraOverlay?.stop()
+        cameraOverlay = null
+        overlayContainer?.let { try { wm?.removeView(it) } catch (_: Exception) {} }
+        overlayContainer = null
+        overlay = null
         setCamo(false)
         running = false
     }
@@ -201,7 +242,11 @@ class CaptureService : Service() {
         stopCapture()
         try { detector?.close() } catch (_: Exception) {}
         detector = null
-        overlay?.let { try { wm?.removeView(it) } catch (_: Exception) {} }
+        overlayContainer?.let { try { wm?.removeView(it) } catch (_: Exception) {} }
+        overlayContainer = null
+        overlay = null
+        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         instance = null
         super.onDestroy()
     }
