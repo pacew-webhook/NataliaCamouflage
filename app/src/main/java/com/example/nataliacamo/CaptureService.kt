@@ -29,6 +29,7 @@ class CaptureService : Service(), LifecycleOwner {
     private var detector: CamouflageDetector? = null
     private val camo = AtomicBoolean(false)
     private val processing = AtomicBoolean(false)
+    private val stopping = AtomicBoolean(false)
     private var captureThread: HandlerThread? = null
     private var captureHandler: Handler? = null
 
@@ -50,11 +51,6 @@ class CaptureService : Service(), LifecycleOwner {
         instance = this
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         channel()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(7, notification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        } else {
-            startForeground(7, notification())
-        }
     }
 
     override fun onStartCommand(i: Intent?, f: Int, id: Int): Int {
@@ -79,6 +75,33 @@ class CaptureService : Service(), LifecycleOwner {
             i.getParcelableExtra(DATA)
         }
         if (code != Activity.RESULT_OK || data == null) {
+            stopSelf()
+            return
+        }
+
+        // Android 14+ requires each foreground-service type used by the
+        // service to be declared in the manifest and supplied to startForeground.
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                startForeground(
+                    7,
+                    notification(),
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    7,
+                    notification(),
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                )
+            } else {
+                startForeground(7, notification())
+            }
+        } catch (_: SecurityException) {
+            stopSelf()
+            return
+        } catch (_: IllegalArgumentException) {
             stopSelf()
             return
         }
@@ -205,6 +228,8 @@ class CaptureService : Service(), LifecycleOwner {
     }
 
     private fun stopCapture() {
+        if (!stopping.compareAndSet(false, true)) return
+        try { lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP) } catch (_: Exception) {}
         try { display?.release() } catch (_: Exception) {}
         display = null
         try { reader?.close() } catch (_: Exception) {}
@@ -222,6 +247,7 @@ class CaptureService : Service(), LifecycleOwner {
         overlay = null
         setCamo(false)
         running = false
+        stopping.set(false)
     }
 
     private fun stopAll() {
