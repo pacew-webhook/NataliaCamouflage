@@ -1,4 +1,4 @@
-# Natalia Camouflage v1.4 – Live Camera Camouflage
+# Natalia Camouflage v1.4.1 – Live Camera Camouflage
 
 Based on v1.0 STARTUP-STABILITY-FIX.
 
@@ -15,4 +15,4 @@ The camera overlay is an Android screen overlay. Whether a particular live/strea
 
 ### Build compatibility fix
 
-The project uses Kotlin 2.3.0 because LiteRT 2.2.0 is compiled with Kotlin metadata 2.3.0. This avoids the Kotlin metadata mismatch that occurred with Kotlin 2.0.21.
+The project uses Kotlin 2.3.20 because LiteRT 2.2.0 is compiled with Kotlin metadata 2.3.0. The build uses the Kotlin 2.3.x compiler family required by the LiteRT 2.2.0 API metadata. Kotlin compilation is forced in-process in CI to avoid Kotlin daemon startup/GC failures.
