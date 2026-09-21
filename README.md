@@ -2,6 +2,12 @@
 
 Android Studio project for on-device Natalia camouflage detection.
 
+## V3.2 (akar masalah deteksi)
+- **Bug utama:** model `natalia_camouflage.tflite` (MobileNetV2 Keras) SUDAH menormalisasi input sendiri (`x * 1/127.5 - 1` di dua op pertama graph-nya), jadi input harus **0..255 mentah**. Versi sebelumnya mengirim `r/127.5 - 1` sehingga input dinormalisasi dua kali -> hampir konstan -> model selalu menjawab "normal" (~96%) apa pun isi layar. Sekarang default 0..255 mentah.
+- Multi-crop: tiap frame dicoba crop ROI, layar penuh, dan ROI besar; skor camouflage tertinggi dipakai. Nama crop pemenang tampil di overlay.
+- Efek kamera: kalau kamuflase ON tapi mask segmentasi belum siap, seluruh kamera ditutup pola (mudah dites).
+- Pengaturan disimpan di `detector_settings_v4` supaya nilai lama (normalisasi salah) otomatis direset.
+
 ## V3.1 (stabilitas / anti-crash)
 - `startForeground()` dipanggil untuk setiap start service (sebelumnya bisa crash `ForegroundServiceDidNotStartInTimeException`).
 - Tipe foreground kamera hanya dipakai jika izin kamera sudah diberikan (ada cadangan tanpa kamera).
@@ -9,7 +15,8 @@ Android Studio project for on-device Natalia camouflage detection.
 - Error start (model gagal dimuat, overlay/kamera gagal) tampil di panel, bukan diam-diam berhenti.
 - Log crash disimpan otomatis dan tampil di panel dengan tombol "Salin log crash".
 - Keystore debug tetap di `app/debug.keystore` sehingga APK baru bisa di-install sebagai update. Satu kali saja: uninstall versi lama yang ditandatangani key CI berbeda.
-- CI: hapus `--refresh-dependencies`, versi 3.1.0, upload build report saat gagal.
+- CI: hapus `--refresh-dependencies`, versi 3.2.0, upload build report saat gagal.
+- CI: APK dipublikasikan ke **GitHub Releases** sebagai file `.apk` langsung (bukan zip di dalam zip). Unduh dari tab Releases di HP lalu install.
 
 ## V3 changes (perbaikan deteksi)
 - **Crop persegi:** ROI tidak lagi diperas ke 224x224 (rasio dijaga).
