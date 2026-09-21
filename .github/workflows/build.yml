@@ -6,7 +6,7 @@ on:
     branches: ["**"]
 
 permissions:
-  contents: read
+  contents: write   # dibutuhkan untuk membuat GitHub Release berisi APK
 
 jobs:
   build:
@@ -26,59 +26,53 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
-      - name: Verify Gradle and Kotlin configuration
-        run: |
-          set -euo pipefail
-          gradle --version
-          gradle --no-daemon :app:dependencies --configuration debugCompileClasspath > /tmp/dependencies.txt
-          grep -E "kotlin-stdlib|litert" /tmp/dependencies.txt | head -50 || true
-
       - name: Build Debug APK
         run: gradle --no-daemon assembleDebug
 
-      - name: Verify APK before packaging
+      - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
           APK="app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
           unzip -t "$APK" >/dev/null
-          if command -v apksigner >/dev/null 2>&1; then
-            apksigner verify --verbose "$APK"
+          unzip -l "$APK" | grep -q "classes.dex"
+          unzip -l "$APK" | grep -q "AndroidManifest.xml"
+          unzip -l "$APK" | grep -q "natalia_camouflage.tflite"
+          APKSIGNER="$(ls "${ANDROID_HOME:-/usr/local/lib/android/sdk}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --verbose --print-certs "$APK" | head -20
           fi
-          echo "APK verified: $(du -h "$APK" | cut -f1)"
-      - name: Verify signing certificate (harus sama di setiap build)
-        shell: bash
-        run: |
-          set -euo pipefail
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-          keytool -printcert -jarfile "$APK" | grep -E "Owner|SHA256" || true
-
-      - name: Verify APK exists
-        shell: bash
-        run: |
-          set -euo pipefail
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-          test -f "$APK"
-          unzip -t "$APK"
+          echo "APK OK: $(du -h "$APK" | cut -f1)"
           sha256sum "$APK"
 
-      - name: Package APK into ZIP
+      - name: Rename APK
         shell: bash
         run: |
-          set -euo pipefail
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-          OUT="NataliaCamouflage-v3.1.0-debug.zip"
-          rm -f "$OUT"
-          zip -q -j "$OUT" "$APK"
-          unzip -t "$OUT"
-          sha256sum "$OUT"
+          cp app/build/outputs/apk/debug/app-debug.apk NataliaCamouflage-v3.1.0-debug.apk
+          ls -la NataliaCamouflage-v3.1.0-debug.apk
 
-      - name: Upload verified ZIP artifact
+      # Cara TERMUDAH di HP: APK langsung bisa diunduh (bukan .zip) dari halaman Releases.
+      - name: Publish APK to GitHub Release
+        if: github.ref_name == 'main' || github.ref_name == 'master' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v3.1.0-build${{ github.run_number }}"
+          gh release create "$TAG" NataliaCamouflage-v3.1.0-debug.apk \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Natalia Camouflage 3.1.0 (build ${{ github.run_number }})" \
+            --notes "Debug APK. Unduh file .apk lalu install langsung, tidak perlu di-extract." \
+            --prerelease
+
+      # Cadangan: GitHub selalu membungkus artifact dalam 1 lapis zip. APK diupload
+      # langsung (TANPA di-zip lagi) supaya tidak jadi zip di dalam zip.
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NataliaCamouflage-v3.1.0-debug
-          path: NataliaCamouflage-v3.1.0-debug.zip
+          name: NataliaCamouflage-v3.1.0-debug-apk
+          path: NataliaCamouflage-v3.1.0-debug.apk
           if-no-files-found: error
 
       - name: Upload build reports (jika build gagal)
@@ -86,7 +80,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-reports
-          path: |
-            app/build/reports
-            /tmp/dependencies.txt
+          path: app/build/reports
           if-no-files-found: ignore
