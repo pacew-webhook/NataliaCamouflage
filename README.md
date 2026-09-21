@@ -1,18 +1,34 @@
-# Natalia Camouflage v1.4.1 – Live Camera Camouflage
+# Natalia Camouflage V2
 
-Based on v1.0 STARTUP-STABILITY-FIX.
+Android Studio project for on-device Natalia camouflage detection.
 
-## New behavior
-- The app continues detecting Natalia camouflage from the game screen with `natalia_camouflage.tflite`.
-- When AI state is `CAMOUFLAGE`, a front-camera overlay activates a person-segmentation effect.
-- The camera background remains visible while the detected person area is covered with a camouflage pattern.
-- When AI returns to `NORMAL`, the camera returns to the normal preview.
-- CameraX + ML Kit Selfie Segmentation are used for the live camera effect.
+## V2 changes
+- **ROI-first detection:** the detector crops a configurable region of the MediaProjection frame before resizing it to the TFLite input.
+- **Adjustable ROI:** edit X/Y/width/height from the app, or use the on-screen ROI editor while the detector is running.
+- **Confidence threshold:** configurable 40–95%.
+- **Temporal stabilizer:** configurable consecutive ON/OFF frames to reduce flicker.
+- **Model-aware input:** reads the TFLite input tensor shape/type and supports the existing FLOAT32 model convention.
+- **Probability handling:** accepts already-normalized probabilities and applies softmax to logits when needed.
+- **Live front camera:** CameraX + ML Kit Selfie Segmentation. The segmented person is covered with a camouflage pattern only when the detector is ON.
+- **ROI guide:** optional full-screen guide over the game.
+- **Memory safety:** latest-frame processing and bounded ImageReader buffers.
 
-## Important
-The camera overlay is an Android screen overlay. Whether a particular live/streaming app includes Android overlays in its broadcast depends on how that app captures the screen/camera. The game detector itself remains independent of the camera segmenter.
+## Recommended first run
+1. Open the project in Android Studio.
+2. Build/install the debug APK.
+3. Grant **Display over other apps** and **Camera** permission.
+4. Press **Start Detector** and approve screen capture.
+5. Start with **Preset: Tengah / Natalia**.
+6. If detection remains OFF, press **Edit ROI di layar game** and move/resize the cyan box so it covers Natalia.
+7. Adjust **Confidence threshold** if necessary.
 
+## Important model note
+The included `natalia_camouflage.tflite` is the model supplied with the original project. V2 improves the image pipeline around that model; it does not retrain the model. If the model was trained on a different crop, normalization, or camera orientation, its accuracy may still require a better training dataset/model.
 
-### Build compatibility fix
-
-The project uses Kotlin 2.3.20 because LiteRT 2.2.0 is compiled with Kotlin metadata 2.3.0. The build uses the Kotlin 2.3.x compiler family required by the LiteRT 2.2.0 API metadata. Kotlin compilation is forced in-process in CI to avoid Kotlin daemon startup/GC failures.
+## Build
+- Compile SDK 35
+- Min SDK 26
+- Target SDK 35
+- AGP 8.7.3
+- Kotlin 2.3.20
+- Gradle 8.10.2 (recommended by the included CI workflow)
