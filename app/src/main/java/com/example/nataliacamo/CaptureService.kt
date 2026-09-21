@@ -120,9 +120,17 @@ class CaptureService : Service(), LifecycleOwner {
         }, Handler(Looper.getMainLooper()))
 
         val dm = resources.displayMetrics
+        // Do not allocate full-resolution RGBA buffers for every screen frame.
+        // The classifier consumes 224x224, so a capped capture resolution is
+        // sufficient and dramatically reduces memory pressure on high-DPI phones.
+        val maxDimension = 1280
+        val scale = minOf(1f, maxDimension.toFloat() / maxOf(dm.widthPixels, dm.heightPixels).toFloat())
+        val captureWidth = (dm.widthPixels * scale).toInt().coerceAtLeast(320)
+        val captureHeight = (dm.heightPixels * scale).toInt().coerceAtLeast(320)
+
         reader = ImageReader.newInstance(
-            dm.widthPixels,
-            dm.heightPixels,
+            captureWidth,
+            captureHeight,
             PixelFormat.RGBA_8888,
             2
         )
@@ -160,9 +168,9 @@ class CaptureService : Service(), LifecycleOwner {
         }, captureHandler)
 
         display = projection?.createVirtualDisplay(
-            "NataliaFinal",
-            dm.widthPixels,
-            dm.heightPixels,
+            "NataliaCamouflage",
+            captureWidth,
+            captureHeight,
             dm.densityDpi,
             0,
             reader!!.surface,
