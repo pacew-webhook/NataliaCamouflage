@@ -14,13 +14,19 @@ data class DetectorSettings(
     val showRoi: Boolean = true,
     /** Crop persegi (tidak diperas) sebelum masuk ke model. */
     val squareCrop: Boolean = true,
-    /** 0 = [-1,1], 1 = [0,1], 2 = 0..255 (hanya model FLOAT32). */
+    /**
+     * Skala piksel yang dikirim ke model (hanya model FLOAT32):
+     * 0 = 0..255 mentah (DEFAULT, model ini sudah punya normalisasi x/127.5-1 di dalamnya),
+     * 1 = [-1,1], 2 = [0,1].
+     */
     val norm: Int = 0,
     /** -1 = otomatis dari labels.txt, 0/1 = paksa indeks output "camouflage". */
     val camoIndex: Int = -1,
+    /** Coba beberapa crop (ROI, layar penuh, ROI besar) dan pakai skor camouflage tertinggi. */
+    val multiCrop: Boolean = true,
 ) {
     companion object {
-        private const val PREF = "detector_settings_v3"
+        private const val PREF = "detector_settings_v4"
         private const val L = "left"
         private const val T = "top"
         private const val W = "width"
@@ -33,6 +39,7 @@ data class DetectorSettings(
         private const val SQUARE = "square_crop"
         private const val NORM = "norm"
         private const val CAMO_INDEX = "camo_index"
+        private const val MULTI = "multi_crop"
 
         fun save(context: Context, settings: DetectorSettings) = settings.save(context)
 
@@ -72,6 +79,7 @@ data class DetectorSettings(
                 squareCrop = p.getBoolean(SQUARE, d.squareCrop),
                 norm = p.getInt(NORM, d.norm),
                 camoIndex = p.getInt(CAMO_INDEX, d.camoIndex),
+                multiCrop = p.getBoolean(MULTI, d.multiCrop),
             ).normalized()
         }
     }
@@ -107,6 +115,7 @@ data class DetectorSettings(
             .putBoolean(SQUARE, s.squareCrop)
             .putInt(NORM, s.norm)
             .putInt(CAMO_INDEX, s.camoIndex)
+            .putBoolean(MULTI, s.multiCrop)
             .apply()
     }
 }

@@ -19,13 +19,18 @@ data class Detection(
     val roi: DetectorSettings,
     /** Probabilitas kelas "camouflage" (ini yang dibandingkan dengan threshold). */
     val camoProb: Float = 0f,
+    /** Nama crop yang menghasilkan skor camouflage tertinggi. */
+    val crop: String = "",
 )
+
+private class Crop(val name: String, val left: Int, val top: Int, val w: Int, val h: Int)
 
 /**
  * V3 detector.
  *
  * Perubahan dari V2:
  * - crop persegi (tidak memeras ROI) sebelum di-resize ke input model
+ * - model ini SUDAH menormalisasi input sendiri (x/127.5-1), jadi input harus 0..255 mentah
  * - mode normalisasi input bisa dipilih (model FLOAT32)
  * - keputusan ON = probabilitas kelas camouflage >= threshold
  * - indeks kelas camouflage bisa dipaksa jika urutan labels salah
@@ -127,35 +132,64 @@ class CamouflageDetector(context: Context) : AutoCloseable {
             cropH = side
         }
 
-        inputBufferFor(inputType).clear()
-        for (y in 0 until inputHeight) {
-            val srcY = top + ((y.toLong() * cropH) / inputHeight).toInt().coerceIn(0, cropH - 1)
-            val rowStart = srcY.toLong() * rowStride
-            for (x in 0 until inputWidth) {
-                val srcX = left + ((x.toLong() * cropW) / inputWidth).toInt().coerceIn(0, cropW - 1)
-                val offset = (rowStart + srcX.toLong() * pixelStride).toInt()
-                val r = safeByte(buffer, offset)
-                val g = safeByte(buffer, offset + 1)
-                val b = safeByte(buffer, offset + 2)
-                putPixel(r, g, b, s.norm)
-            }
+        val candidates = ArrayList<Crop>(3)
+        candidates.add(Crop("ROI", left, top, cropW, cropH))
+        if (s.multiCrop) {
+            candidates.add(Crop("layar", 0, 0, width, height))
+            // Persegi lebih besar (1.6x) di sekitar pusat ROI.
+            val big = (minOf(cropW, cropH) * 1.6f).toInt().coerceIn(1, minOf(width, height))
+            val cx = left + cropW / 2
+            val cy = top + cropH / 2
+            val bl = (cx - big / 2).coerceIn(0, width - big)
+            val bt = (cy - big / 2).coerceIn(0, height - big)
+            candidates.add(Crop("ROI besar", bl, bt, big, big))
         }
 
-        runInference()
-        val scores = readScores()
-        val probabilities = toProbabilities(scores)
+        val camoIdx = camoIndex(s)
+        var bestProbs: FloatArray? = null
+        var bestCrop = candidates[0]
+        var bestCamo = -1f
+        for (c in candidates) {
+            val probs = classify(buffer, rowStride, pixelStride, c, s.norm)
+            val cp = probs.getOrElse(camoIdx) { 0f }.coerceIn(0f, 1f)
+            if (cp > bestCamo) {
+                bestCamo = cp
+                bestProbs = probs
+                bestCrop = c
+            }
+        }
+        val probabilities = bestProbs ?: floatArrayOf(0f, 1f)
         val index = probabilities.indices.maxByOrNull { probabilities[it] } ?: 0
         val confidence = probabilities.getOrElse(index) { 0f }.coerceIn(0f, 1f)
         val label = labels.getOrNull(index)?.lowercase()?.trim() ?: "normal"
-        val camoProb = probabilities.getOrElse(camoIndex(s)) { 0f }.coerceIn(0f, 1f)
+        val camoProb = bestCamo.coerceIn(0f, 1f)
         val camouflage = camoProb >= s.threshold / 100f
 
         val now = System.currentTimeMillis()
         if (now - lastLog > 1000L) {
             lastLog = now
-            Log.d(TAG, "scores=${scores.toList()} probs=${probabilities.toList()} camoProb=$camoProb norm=${s.norm} crop=${cropW}x$cropH@$left,$top frame=${width}x$height")
+            Log.d(TAG, "probs=${probabilities.toList()} camoProb=$camoProb crop=${bestCrop.name} ${bestCrop.w}x${bestCrop.h}@${bestCrop.left},${bestCrop.top} norm=${s.norm} frame=${width}x$height")
         }
-        return Detection(camouflage, confidence, label, s, camoProb)
+        return Detection(camouflage, confidence, label, s, camoProb, bestCrop.name)
+    }
+
+    /** Resize crop ke input model, jalankan inferensi, kembalikan probabilitas tiap kelas. */
+    private fun classify(buffer: ByteBuffer, rowStride: Int, pixelStride: Int, crop: Crop, norm: Int): FloatArray {
+        inputBufferFor(inputType).clear()
+        for (y in 0 until inputHeight) {
+            val srcY = crop.top + ((y.toLong() * crop.h) / inputHeight).toInt().coerceIn(0, crop.h - 1)
+            val rowStart = srcY.toLong() * rowStride
+            for (x in 0 until inputWidth) {
+                val srcX = crop.left + ((x.toLong() * crop.w) / inputWidth).toInt().coerceIn(0, crop.w - 1)
+                val offset = (rowStart + srcX.toLong() * pixelStride).toInt()
+                val r = safeByte(buffer, offset)
+                val g = safeByte(buffer, offset + 1)
+                val b = safeByte(buffer, offset + 2)
+                putPixel(r, g, b, norm)
+            }
+        }
+        runInference()
+        return toProbabilities(readScores())
     }
 
     private fun safeByte(buffer: ByteBuffer, index: Int): Int {
@@ -177,10 +211,11 @@ class CamouflageDetector(context: Context) : AutoCloseable {
         return activeInput
     }
 
+    // 0 = 0..255 mentah (default; model sudah menormalisasi sendiri), 1 = [-1,1], 2 = [0,1]
     private fun conv(v: Int, norm: Int): Float = when (norm) {
-        1 -> v / 255f
-        2 -> v.toFloat()
-        else -> v / 127.5f - 1f
+        1 -> v / 127.5f - 1f
+        2 -> v / 255f
+        else -> v.toFloat()
     }
 
     private fun putPixel(r: Int, g: Int, b: Int, norm: Int) {

@@ -77,6 +77,8 @@ class CaptureService : Service(), LifecycleOwner {
         fun reportError(message: String) { lastError = message }
         @Volatile var manualMode: Boolean? = null
             private set
+        @Volatile var cropName = ""
+            private set
         @Volatile var label = "normal"
             private set
 
@@ -267,6 +269,7 @@ class CaptureService : Service(), LifecycleOwner {
             lastLabel = d.label
             confidence = d.confidence
             camoProb = d.camoProb
+            cropName = d.crop
             label = d.label
             updateStableState(d)
             mainHandler.post { updateStatusText() }
@@ -411,7 +414,7 @@ class CaptureService : Service(), LifecycleOwner {
     private fun updateStatusText() {
         val state = if (camouflage) "ON" else "OFF"
         val mode = if (manual != null) " (manual)" else ""
-        overlay?.text = String.format("CAMOUFLAGE: %s%s  •  camo %.0f%%  •  %s", state, mode, camoProb * 100f, lastLabel)
+        overlay?.text = String.format("CAMOUFLAGE: %s%s  •  camo %.0f%%  •  %s", state, mode, camoProb * 100f, cropName)
         roiOverlay?.setSettings(DetectorSettings.load(this))
     }
 
@@ -454,6 +457,7 @@ class CaptureService : Service(), LifecycleOwner {
         setCamo(false)
         confidence = 0f
         camoProb = 0f
+        cropName = ""
         label = "normal"
     }
 

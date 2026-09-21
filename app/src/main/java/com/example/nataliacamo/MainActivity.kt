@@ -28,6 +28,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var roiSwitch: Switch
     private lateinit var showRoiSwitch: Switch
     private lateinit var squareSwitch: Switch
+    private lateinit var multiSwitch: Switch
     private lateinit var editRoiButton: Button
     private lateinit var normButton: Button
     private lateinit var camoIndexButton: Button
@@ -185,6 +186,16 @@ class MainActivity : ComponentActivity() {
             }
         }
         root.addView(squareSwitch)
+
+        multiSwitch = Switch(this).apply {
+            text = "Multi-crop (ROI + layar penuh + ROI besar, ambil skor tertinggi)"
+            isChecked = settings.multiCrop
+            setOnCheckedChangeListener { _, checked ->
+                settings = settings.copy(multiCrop = checked).normalized()
+                saveSettings()
+            }
+        }
+        root.addView(multiSwitch)
 
         editRoiButton = Button(this).apply {
             text = "Edit ROI di layar game"
@@ -356,19 +367,21 @@ class MainActivity : ComponentActivity() {
             null -> ""
         }
         detectorState.text = String.format(
-            "AI: %s • camo %.0f%% • top: %s %.0f%%%s",
+            "AI: %s • camo %.0f%% (crop: %s) • top: %s %.0f%%%s",
             if (CaptureService.camouflage) "CAMOUFLAGE ON" else "NORMAL/OFF",
             CaptureService.camoProb * 100f,
+            CaptureService.cropName.ifEmpty { "-" },
             CaptureService.label,
             CaptureService.confidence * 100f,
             manualText
         )
         roiSummary.text = "ROI: x=${settings.left} y=${settings.top} w=${settings.width} h=${settings.height} /1000 • threshold=${settings.threshold}%"
         thresholdValue.text = "Threshold aktif: ${settings.threshold}%"
-        normButton.text = "Normalisasi input: " + when (settings.norm) { 0 -> "[-1, 1]"; 1 -> "[0, 1]"; else -> "0–255" } + " (tap untuk ganti)"
+        normButton.text = "Normalisasi input: " + when (settings.norm) { 0 -> "0–255 mentah (benar untuk model ini)"; 1 -> "[-1, 1]"; else -> "[0, 1]" } + " (tap untuk ganti)"
         camoIndexButton.text = "Indeks kelas camouflage: " + when (settings.camoIndex) { -1 -> "otomatis (labels.txt)"; else -> "${settings.camoIndex}" } + " (tap untuk ganti)"
         if (roiSwitch.isChecked != settings.roiEnabled) roiSwitch.isChecked = settings.roiEnabled
         if (squareSwitch.isChecked != settings.squareCrop) squareSwitch.isChecked = settings.squareCrop
+        if (multiSwitch.isChecked != settings.multiCrop) multiSwitch.isChecked = settings.multiCrop
         handler.postDelayed({ if (!isFinishing) refreshUi() }, 500)
     }
 }

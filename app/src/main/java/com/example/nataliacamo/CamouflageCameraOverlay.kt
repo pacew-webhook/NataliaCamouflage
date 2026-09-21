@@ -175,8 +175,17 @@ private class CamouflageMaskView @JvmOverloads constructor(
         try {
             pendingMask.getAndSet(null)?.let { mask = it }
             if (!active) return
-            val m = mask ?: return
-            if (m.isRecycled || width <= 0 || height <= 0) return
+            if (width <= 0 || height <= 0) return
+            val m = mask
+            if (m == null || m.isRecycled) {
+                // Mask segmentasi belum siap: tutup seluruh kamera dengan pola supaya efeknya
+                // tetap kelihatan (dan mudah dites) sampai mask pertama datang.
+                patternPaint.shader = shader
+                patternPaint.alpha = 150
+                canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), patternPaint)
+                patternPaint.shader = null
+                return
+            }
             val layer = canvas.saveLayer(0f, 0f, width.toFloat(), height.toFloat(), null)
             val src = centerCropSource(m.width, m.height, width, height)
             val dst = RectF(0f, 0f, width.toFloat(), height.toFloat())
