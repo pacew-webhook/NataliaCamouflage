@@ -11,3 +11,8 @@ Based on v1.0 STARTUP-STABILITY-FIX.
 
 ## Important
 The camera overlay is an Android screen overlay. Whether a particular live/streaming app includes Android overlays in its broadcast depends on how that app captures the screen/camera. The game detector itself remains independent of the camera segmenter.
+
+
+### Build compatibility fix
+
+The project uses Kotlin 2.3.0 because LiteRT 2.2.0 is compiled with Kotlin metadata 2.3.0. This avoids the Kotlin metadata mismatch that occurred with Kotlin 2.0.21.
