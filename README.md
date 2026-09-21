@@ -2,6 +2,15 @@
 
 Android Studio project for on-device Natalia camouflage detection.
 
+## V3.1 (stabilitas / anti-crash)
+- `startForeground()` dipanggil untuk setiap start service (sebelumnya bisa crash `ForegroundServiceDidNotStartInTimeException`).
+- Tipe foreground kamera hanya dipakai jika izin kamera sudah diberikan (ada cadangan tanpa kamera).
+- Mask kamera tidak lagi di-recycle dari thread lain (crash "trying to use a recycled bitmap"); exception di callback ML Kit ditangkap.
+- Error start (model gagal dimuat, overlay/kamera gagal) tampil di panel, bukan diam-diam berhenti.
+- Log crash disimpan otomatis dan tampil di panel dengan tombol "Salin log crash".
+- Keystore debug tetap di `app/debug.keystore` sehingga APK baru bisa di-install sebagai update. Satu kali saja: uninstall versi lama yang ditandatangani key CI berbeda.
+- CI: hapus `--refresh-dependencies`, versi 3.1.0, upload build report saat gagal.
+
 ## V3 changes (perbaikan deteksi)
 - **Crop persegi:** ROI tidak lagi diperas ke 224x224 (rasio dijaga).
 - **Preset "Persegi tepat di Natalia":** ROI kecil di tengah layar tempat hero berada.
