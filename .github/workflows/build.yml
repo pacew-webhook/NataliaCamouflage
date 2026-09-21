@@ -49,20 +49,30 @@ jobs:
       - name: Rename APK
         shell: bash
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk NataliaCamouflage-v3.1.0-debug.apk
-          ls -la NataliaCamouflage-v3.1.0-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk NataliaCamouflage-v3.2.0-debug.apk
+          ls -la NataliaCamouflage-v3.2.0-debug.apk
+          SIZE=$(stat -c %s NataliaCamouflage-v3.2.0-debug.apk)
+          SHA=$(sha256sum NataliaCamouflage-v3.2.0-debug.apk | cut -d' ' -f1)
+          {
+            echo "## APK siap"
+            echo ""
+            echo "- Ukuran yang BENAR: **$SIZE byte** (~$((SIZE / 1024 / 1024)) MB)"
+            echo "- SHA-256: \`$SHA\`"
+            echo ""
+            echo "Kalau file yang terunduh di HP ukurannya jauh lebih kecil, unduhannya gagal (bukan APK/zip yang asli)."
+            echo "Unduh dari **Releases** (file .apk langsung): https://github.com/${{ github.repository }}/releases"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # Cara TERMUDAH di HP: APK langsung bisa diunduh (bukan .zip) dari halaman Releases.
       - name: Publish APK to GitHub Release
-        if: github.ref_name == 'main' || github.ref_name == 'master' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v3.1.0-build${{ github.run_number }}"
-          gh release create "$TAG" NataliaCamouflage-v3.1.0-debug.apk \
+          TAG="v3.2.0-build${{ github.run_number }}-${{ github.run_attempt }}"
+          gh release create "$TAG" NataliaCamouflage-v3.2.0-debug.apk \
             --repo "${{ github.repository }}" \
             --target "${{ github.sha }}" \
-            --title "Natalia Camouflage 3.1.0 (build ${{ github.run_number }})" \
+            --title "Natalia Camouflage 3.2.0 (build ${{ github.run_number }})" \
             --notes "Debug APK. Unduh file .apk lalu install langsung, tidak perlu di-extract." \
             --prerelease
 
@@ -71,9 +81,10 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NataliaCamouflage-v3.1.0-debug-apk
-          path: NataliaCamouflage-v3.1.0-debug.apk
+          name: NataliaCamouflage-v3.2.0-debug-apk
+          path: NataliaCamouflage-v3.2.0-debug.apk
           if-no-files-found: error
+          compression-level: 0   # APK sudah terkompres; tanpa kompresi ulang lebih kompatibel
 
       - name: Upload build reports (jika build gagal)
         if: failure()
