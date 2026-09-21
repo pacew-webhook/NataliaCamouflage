@@ -1,6 +1,17 @@
-# Natalia Camouflage V2
+# Natalia Camouflage V3
 
 Android Studio project for on-device Natalia camouflage detection.
+
+## V3 changes (perbaikan deteksi)
+- **Crop persegi:** ROI tidak lagi diperas ke 224x224 (rasio dijaga).
+- **Preset "Persegi tepat di Natalia":** ROI kecil di tengah layar tempat hero berada.
+- **Angka `camo %` ditampilkan** di overlay kamera dan panel; ON = probabilitas kelas camouflage >= threshold.
+- **Normalisasi input** ([-1,1], [0,1], 0-255) dan **indeks kelas camouflage** bisa diganti dari panel.
+- **Tombol TEST menahan** sampai ditekan MODE OTOMATIS (sebelumnya balik OFF dalam ~1 detik).
+- **Rotasi layar:** ukuran capture ikut berubah sehingga crop ROI tetap benar.
+- **Slider sinkron** dengan ROI yang digeser di layar game (sebelumnya bisa menimpa nilai lama).
+- **Overlay ROI** menutupi seluruh layar (koordinat sama dengan frame) dan garisnya digambar di luar area crop.
+- Logcat tag `NataliaCamo` mencetak skor mentah model tiap ±1 detik.
 
 ## V2 changes
 - **ROI-first detection:** the detector crops a configurable region of the MediaProjection frame before resizing it to the TFLite input.
