@@ -2,6 +2,9 @@
 <resources>
     <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:colorAccent">#6750A4</item>
+        <item name="android:colorAccent">#FFBE32</item>
+        <item name="android:windowBackground">#15191C</item>
+        <item name="android:textColorPrimary">#FFFFFF</item>
+        <item name="android:textColorSecondary">#C8CDD1</item>
     </style>
 </resources>
