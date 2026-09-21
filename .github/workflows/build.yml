@@ -1,4 +1,4 @@
-name: Build Android APK - ZIP Artifact
+name: Build Android APK - Kotlin/LiteRT Fix
 
 on:
   workflow_dispatch:
@@ -26,8 +26,15 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
+      - name: Verify Gradle and Kotlin configuration
+        run: |
+          set -euo pipefail
+          gradle --version
+          gradle --no-daemon --refresh-dependencies :app:dependencies --configuration debugCompileClasspath > /tmp/dependencies.txt
+          grep -E "kotlin-stdlib|litert" /tmp/dependencies.txt | head -50 || true
+
       - name: Build Debug APK
-        run: gradle --no-daemon assembleDebug
+        run: gradle --no-daemon --refresh-dependencies --no-build-cache assembleDebug
 
       - name: Verify APK before packaging
         shell: bash
@@ -44,7 +51,7 @@ jobs:
       - name: Upload APK as downloadable ZIP artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NataliaCamouflage-v1.4-debug
+          name: NataliaCamouflage-v1.4.1-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
