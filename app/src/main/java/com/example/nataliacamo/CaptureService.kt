@@ -1,30 +1,37 @@
 package com.example.nataliacamo
 
 import android.app.*
-import android.content.*
+import android.content.Context
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.*
-import android.view.*
-import android.widget.TextView
+import android.provider.Settings
+import android.view.Gravity
+import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.TextView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import java.util.concurrent.atomic.AtomicBoolean
 
+/** Foreground service: screen capture -> ROI classifier -> camera overlay. */
 class CaptureService : Service(), LifecycleOwner {
     private val lifecycleRegistry = LifecycleRegistry(this)
     override val lifecycle: Lifecycle get() = lifecycleRegistry
+
     private var projection: MediaProjection? = null
     private var reader: ImageReader? = null
     private var display: android.hardware.display.VirtualDisplay? = null
     private var overlay: TextView? = null
     private var overlayContainer: FrameLayout? = null
     private var cameraOverlay: CamouflageCameraOverlay? = null
+    private var roiOverlay: RoiOverlayView? = null
+    private var roiParams: WindowManager.LayoutParams? = null
     private var wm: WindowManager? = null
     private var detector: CamouflageDetector? = null
     private val camo = AtomicBoolean(false)
@@ -32,6 +39,11 @@ class CaptureService : Service(), LifecycleOwner {
     private val stopping = AtomicBoolean(false)
     private var captureThread: HandlerThread? = null
     private var captureHandler: Handler? = null
+    private var onCount = 0
+    private var offCount = 0
+    private var lastConfidence = 0f
+    private var lastLabel = "normal"
+    private var lastInferenceAt = 0L
 
     companion object {
         const val START = "START"
@@ -42,45 +54,55 @@ class CaptureService : Service(), LifecycleOwner {
             private set
         @Volatile var camouflage = false
             private set
+        @Volatile var confidence = 0f
+            private set
+        @Volatile var label = "normal"
+            private set
+
         private var instance: CaptureService? = null
+
         fun demo(v: Boolean) { instance?.setCamo(v) }
+
+        fun updateSettings(context: Context, settings: DetectorSettings) {
+            settings.save(context)
+            instance?.applySettings(settings)
+        }
+
+        fun setRoiEditor(enabled: Boolean) { instance?.setRoiEditor(enabled) }
+        fun setShowRoi(show: Boolean) { instance?.setShowRoi(show) }
     }
 
     override fun onCreate() {
         super.onCreate()
         instance = this
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
-        channel()
+        createChannel()
     }
 
-    override fun onStartCommand(i: Intent?, f: Int, id: Int): Int {
-        when (i?.action) {
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
             START -> {
                 lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
-                startCapture(i)
+                startCapture(intent)
             }
             STOP -> stopAll()
         }
         return START_NOT_STICKY
     }
 
-    private fun startCapture(i: Intent) {
+    private fun startCapture(intent: Intent) {
         if (running) return
-
-        val code = i.getIntExtra(CODE, Activity.RESULT_CANCELED)
+        val code = intent.getIntExtra(CODE, Activity.RESULT_CANCELED)
         val data = if (Build.VERSION.SDK_INT >= 33) {
-            i.getParcelableExtra(DATA, Intent::class.java)
+            intent.getParcelableExtra(DATA, Intent::class.java)
         } else {
-            @Suppress("DEPRECATION")
-            i.getParcelableExtra(DATA)
+            @Suppress("DEPRECATION") intent.getParcelableExtra(DATA)
         }
         if (code != Activity.RESULT_OK || data == null) {
             stopSelf()
             return
         }
 
-        // Android 14+ requires each foreground-service type used by the
-        // service to be declared in the manifest and supplied to startForeground.
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 startForeground(
@@ -95,13 +117,8 @@ class CaptureService : Service(), LifecycleOwner {
                     notification(),
                     android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
                 )
-            } else {
-                startForeground(7, notification())
-            }
-        } catch (_: SecurityException) {
-            stopSelf()
-            return
-        } catch (_: IllegalArgumentException) {
+            } else startForeground(7, notification())
+        } catch (_: Throwable) {
             stopSelf()
             return
         }
@@ -112,63 +129,56 @@ class CaptureService : Service(), LifecycleOwner {
             stopSelf()
             return
         }
+        activeDetector.updateSettings(DetectorSettings.load(this))
+        resetHysteresis()
 
-        val m = getSystemService(MediaProjectionManager::class.java)
-        projection = m.getMediaProjection(code, data)
+        val manager = getSystemService(MediaProjectionManager::class.java)
+        projection = try { manager.getMediaProjection(code, data) } catch (_: Throwable) { null }
+        if (projection == null) {
+            stopSelf()
+            return
+        }
         projection?.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() { stopCapture() }
         }, Handler(Looper.getMainLooper()))
 
         val dm = resources.displayMetrics
-        // Do not allocate full-resolution RGBA buffers for every screen frame.
-        // The classifier consumes 224x224, so a capped capture resolution is
-        // sufficient and dramatically reduces memory pressure on high-DPI phones.
         val maxDimension = 1280
         val scale = minOf(1f, maxDimension.toFloat() / maxOf(dm.widthPixels, dm.heightPixels).toFloat())
         val captureWidth = (dm.widthPixels * scale).toInt().coerceAtLeast(320)
         val captureHeight = (dm.heightPixels * scale).toInt().coerceAtLeast(320)
 
-        reader = ImageReader.newInstance(
-            captureWidth,
-            captureHeight,
-            PixelFormat.RGBA_8888,
-            2
-        )
-
-        captureThread = HandlerThread("NataliaCapture").also { it.start() }
+        reader = ImageReader.newInstance(captureWidth, captureHeight, PixelFormat.RGBA_8888, 2)
+        captureThread = HandlerThread("NataliaCaptureV2").also { it.start() }
         captureHandler = Handler(captureThread!!.looper)
         reader?.setOnImageAvailableListener({ r ->
-            // Drop frames while inference is running. This prevents a backlog
-            // of large Image objects and keeps the game/app responsive.
-            if (!processing.compareAndSet(false, true)) return@setOnImageAvailableListener
-            val image = try {
-                r.acquireLatestImage()
-            } catch (_: Exception) {
-                null
-            }
-            if (image == null) {
-                processing.set(false)
+            val image = try { r.acquireLatestImage() } catch (_: Throwable) { null }
+            if (image == null) return@setOnImageAvailableListener
+            if (!processing.compareAndSet(false, true)) {
+                image.close()
                 return@setOnImageAvailableListener
             }
-
             try {
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastInferenceAt < 80L) return@setOnImageAvailableListener
+                lastInferenceAt = now
                 val d = activeDetector.process(image)
-                if (d.camouflage != camouflage) {
-                    // Only the small UI update returns to the main thread.
-                    Handler(Looper.getMainLooper()).post {
-                        setCamo(d.camouflage)
-                    }
-                }
+                lastConfidence = d.confidence
+                lastLabel = d.label
+                confidence = d.confidence
+                label = d.label
+                updateStableState(d)
+                Handler(Looper.getMainLooper()).post { updateStatusText() }
             } catch (_: Throwable) {
-                // A bad frame must not bring down the foreground service.
+                // A malformed frame never terminates the service.
             } finally {
-                try { image.close() } catch (_: Exception) {}
+                try { image.close() } catch (_: Throwable) {}
                 processing.set(false)
             }
         }, captureHandler)
 
         display = projection?.createVirtualDisplay(
-            "NataliaCamouflage",
+            "NataliaCamouflageV2",
             captureWidth,
             captureHeight,
             dm.densityDpi,
@@ -178,48 +188,64 @@ class CaptureService : Service(), LifecycleOwner {
             captureHandler
         )
 
-        makeOverlay()
+        makeOverlays()
         running = true
+        updateStatusText()
     }
 
-    private fun makeOverlay() {
-        if (overlayContainer != null) return
-        if (!android.provider.Settings.canDrawOverlays(this)) return
+    private fun updateStableState(d: Detection) {
+        val s = d.roi
+        if (!camouflage) {
+            offCount = 0
+            onCount = if (d.camouflage) onCount + 1 else 0
+            if (onCount >= s.onFrames) setCamo(true)
+        } else {
+            onCount = 0
+            offCount = if (!d.camouflage) offCount + 1 else 0
+            if (offCount >= s.offFrames) setCamo(false)
+        }
+    }
 
+    private fun makeOverlays() {
+        if (overlayContainer != null || !Settings.canDrawOverlays(this)) return
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        val container = FrameLayout(this)
+        val root = FrameLayout(this)
         val camera = CamouflageCameraOverlay(this)
         cameraOverlay = camera
-        container.addView(camera, FrameLayout.LayoutParams(-1, -1))
+        root.addView(camera, FrameLayout.LayoutParams(-1, -1))
 
-        val label = TextView(this).apply {
-            text = "CAMOUFLAGE: OFF"
+        val labelView = TextView(this).apply {
             textSize = 12f
             setTextColor(Color.WHITE)
-            setBackgroundColor(0x88000000.toInt())
+            setBackgroundColor(0x99000000.toInt())
             setPadding(12, 8, 12, 8)
+            text = "CAMOUFLAGE: OFF"
         }
-        val labelParams = FrameLayout.LayoutParams(-2, -2).apply {
+        root.addView(labelView, FrameLayout.LayoutParams(-2, -2).apply {
             gravity = Gravity.TOP or Gravity.START
-        }
-        container.addView(label, labelParams)
-        overlay = label
-        overlayContainer = container
+        })
+        overlay = labelView
+        overlayContainer = root
 
-        val p = WindowManager.LayoutParams(
-            360,
-            270,
+        val screenW = resources.displayMetrics.widthPixels
+        val cameraW = (screenW * 0.30f).toInt().coerceAtLeast(300)
+        val cameraH = (cameraW * 0.75f).toInt()
+        val cameraParams = WindowManager.LayoutParams(
+            cameraW,
+            cameraH,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.END
-            x = 18
-            y = 120
+            x = (screenW * 0.012f).toInt()
+            y = (resources.displayMetrics.heightPixels * 0.09f).toInt()
         }
+
         try {
-            wm?.addView(container, p)
+            wm?.addView(root, cameraParams)
             camera.start()
+            makeRoiOverlay()
         } catch (_: Throwable) {
             cameraOverlay?.stop()
             cameraOverlay = null
@@ -228,21 +254,81 @@ class CaptureService : Service(), LifecycleOwner {
         }
     }
 
+    private fun makeRoiOverlay() {
+        if (roiOverlay != null || wm == null) return
+        val view = RoiOverlayView(this)
+        view.setSettings(DetectorSettings.load(this))
+        view.setOnChanged { s ->
+            val normalized = s.normalized()
+            normalized.save(this)
+            detector?.updateSettings(normalized)
+            view.setSettings(normalized)
+        }
+        roiOverlay = view
+        val params = WindowManager.LayoutParams(
+            -1,
+            -1,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.TOP or Gravity.START }
+        roiParams = params
+        try { wm?.addView(view, params) } catch (_: Throwable) { roiOverlay = null }
+    }
+
+    private fun updateStatusText() {
+        val state = if (camouflage) "ON" else "OFF"
+        overlay?.text = String.format("CAMOUFLAGE: %s  •  %.0f%%", state, lastConfidence * 100f)
+        roiOverlay?.setSettings(DetectorSettings.load(this))
+    }
+
     private fun setCamo(v: Boolean) {
         camo.set(v)
         camouflage = v
         cameraOverlay?.setCamouflage(v)
-        overlay?.text = if (v) "CAMOUFLAGE: ON" else "CAMOUFLAGE: OFF"
+    }
+
+    private fun applySettings(settings: DetectorSettings) {
+        val s = settings.normalized()
+        detector?.updateSettings(s)
+        roiOverlay?.setSettings(s)
+        updateStatusText()
+    }
+
+    private fun setShowRoi(show: Boolean) {
+        val s = DetectorSettings.load(this).copy(showRoi = show)
+        s.save(this)
+        roiOverlay?.setSettings(s)
+    }
+
+    private fun setRoiEditor(enabled: Boolean) {
+        roiOverlay?.setEditMode(enabled)
+        roiParams?.let { p ->
+            p.flags = if (enabled) {
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            } else {
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            }
+            try { wm?.updateViewLayout(roiOverlay, p) } catch (_: Throwable) {}
+        }
+    }
+
+    private fun resetHysteresis() {
+        onCount = 0
+        offCount = 0
+        setCamo(false)
+        confidence = 0f
+        label = "normal"
     }
 
     private fun stopCapture() {
         if (!stopping.compareAndSet(false, true)) return
-        try { lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP) } catch (_: Exception) {}
-        try { display?.release() } catch (_: Exception) {}
+        try { lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP) } catch (_: Throwable) {}
+        try { display?.release() } catch (_: Throwable) {}
         display = null
-        try { reader?.close() } catch (_: Exception) {}
+        try { reader?.close() } catch (_: Throwable) {}
         reader = null
-        try { projection?.stop() } catch (_: Exception) {}
+        try { projection?.stop() } catch (_: Throwable) {}
         projection = null
         processing.set(false)
         captureThread?.quitSafely()
@@ -250,10 +336,14 @@ class CaptureService : Service(), LifecycleOwner {
         captureHandler = null
         cameraOverlay?.stop()
         cameraOverlay = null
-        overlayContainer?.let { try { wm?.removeView(it) } catch (_: Exception) {} }
+        overlayContainer?.let { try { wm?.removeView(it) } catch (_: Throwable) {} }
         overlayContainer = null
         overlay = null
-        setCamo(false)
+        roiOverlay?.let { try { wm?.removeView(it) } catch (_: Throwable) {} }
+        roiOverlay = null
+        roiParams = null
+        resetHysteresis()
+        lastInferenceAt = 0L
         running = false
         stopping.set(false)
     }
@@ -263,26 +353,23 @@ class CaptureService : Service(), LifecycleOwner {
         stopSelf()
     }
 
-    private fun channel() {
-        getSystemService(NotificationManager::class.java)
-            .createNotificationChannel(
-                NotificationChannel("final", "Natalia Final", NotificationManager.IMPORTANCE_LOW)
-            )
+    private fun createChannel() {
+        getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel("final", "Natalia Camouflage V2", NotificationManager.IMPORTANCE_LOW)
+        )
     }
 
     private fun notification() = Notification.Builder(this, "final")
-        .setContentTitle("Natalia Camouflage Final")
-        .setContentText("Detector aktif")
+        .setContentTitle("Natalia Camouflage V2")
+        .setContentText("ROI detector aktif")
         .setSmallIcon(android.R.drawable.ic_menu_view)
+        .setOngoing(true)
         .build()
 
     override fun onDestroy() {
         stopCapture()
-        try { detector?.close() } catch (_: Exception) {}
+        try { detector?.close() } catch (_: Throwable) {}
         detector = null
-        overlayContainer?.let { try { wm?.removeView(it) } catch (_: Exception) {} }
-        overlayContainer = null
-        overlay = null
         if (lifecycleRegistry.currentState.isAtLeast(Lifecycle.State.STARTED)) {
             lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
         }
@@ -291,5 +378,5 @@ class CaptureService : Service(), LifecycleOwner {
         super.onDestroy()
     }
 
-    override fun onBind(i: Intent?) = null
+    override fun onBind(intent: Intent?) = null
 }

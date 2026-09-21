@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.*
 import android.util.AttributeSet
 import android.view.View
+import android.widget.FrameLayout
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -11,41 +12,35 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.segmentation.SegmentationMask
-import com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions
 import com.google.mlkit.vision.segmentation.Segmentation
+import com.google.mlkit.vision.segmentation.SegmentationMask
 import com.google.mlkit.vision.segmentation.Segmenter
+import com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions
 import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-/**
- * Small camera overlay used by the live camouflage effect.
- * The camera stays visible normally; when camouflage is active, the person's
- * segmented area is covered by a lightweight camouflage pattern while the
- * background remains visible.
- */
-class CamouflageCameraOverlay(context: Context) : android.widget.FrameLayout(context) {
+/** Small live front-camera window with a segmented camouflage effect. */
+class CamouflageCameraOverlay(context: Context) : FrameLayout(context) {
     private val preview = PreviewView(context).apply {
         scaleType = PreviewView.ScaleType.FILL_CENTER
+        scaleX = -1f
     }
-    private val maskView = CamouflageMaskView(context)
+    private val maskView = CamouflageMaskView(context).apply {
+        scaleX = -1f
+    }
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private var provider: ProcessCameraProvider? = null
     private var segmenter: Segmenter? = null
     private var analyzing = false
 
     init {
-        preview.scaleX = -1f
-        maskView.scaleX = -1f
         addView(preview, LayoutParams(-1, -1))
         addView(maskView, LayoutParams(-1, -1))
         maskView.setWillNotDraw(false)
     }
 
-    fun setCamouflage(active: Boolean) {
-        maskView.setActive(active)
-    }
+    fun setCamouflage(active: Boolean) = maskView.setActive(active)
 
     fun start() {
         if (provider != null) return
@@ -54,7 +49,6 @@ class CamouflageCameraOverlay(context: Context) : android.widget.FrameLayout(con
             .enableRawSizeMask()
             .build()
         segmenter = Segmentation.getClient(options)
-
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
             try {
@@ -66,7 +60,7 @@ class CamouflageCameraOverlay(context: Context) : android.widget.FrameLayout(con
                 }
                 val analysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .setTargetResolution(android.util.Size(480, 480))
+                    .setTargetResolution(android.util.Size(480, 360))
                     .build()
                 analysis.setAnalyzer(executor) { proxy ->
                     val media = proxy.image
@@ -77,18 +71,16 @@ class CamouflageCameraOverlay(context: Context) : android.widget.FrameLayout(con
                     analyzing = true
                     try {
                         val image = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
-                        val task = segmenter?.process(image)
-                        if (task == null) {
-                            analyzing = false
-                            proxy.close()
-                            return@setAnalyzer
-                        }
-                        task.addOnSuccessListener(executor) { mask ->
-                            maskView.setMask(mask)
-                        }.addOnCompleteListener(executor) {
-                            analyzing = false
-                            proxy.close()
-                        }
+                        segmenter?.process(image)
+                            ?.addOnSuccessListener(executor) { mask -> maskView.setMask(mask) }
+                            ?.addOnCompleteListener(executor) {
+                                analyzing = false
+                                proxy.close()
+                            }
+                            ?: run {
+                                analyzing = false
+                                proxy.close()
+                            }
                     } catch (_: Throwable) {
                         analyzing = false
                         proxy.close()
@@ -97,7 +89,7 @@ class CamouflageCameraOverlay(context: Context) : android.widget.FrameLayout(con
                 p.unbindAll()
                 p.bindToLifecycle(context as androidx.lifecycle.LifecycleOwner, selector, previewUseCase, analysis)
             } catch (_: Throwable) {
-                // Camera is optional; the game detector continues to work if camera setup fails.
+                // Camera is optional. Screen detection can continue without it.
             }
         }, ContextCompat.getMainExecutor(context))
     }
@@ -116,9 +108,6 @@ private class CamouflageMaskView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : View(context, attrs) {
-    // ML Kit delivers masks from the analyzer executor. Never recycle the
-    // bitmap currently being drawn from that background thread. Instead, queue
-    // the newest bitmap and swap/recycle it on the View's UI thread in onDraw.
     @Volatile private var pendingMask: Bitmap? = null
     private var mask: Bitmap? = null
     private var active = false
@@ -130,20 +119,18 @@ private class CamouflageMaskView @JvmOverloads constructor(
         val c = Canvas(pattern)
         c.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
         val colors = intArrayOf(0xAA263238.toInt(), 0xAA4E342E.toInt(), 0xAA33691E.toInt(), 0xAA827717.toInt())
-        val r = java.util.Random(42)
-        repeat(28) {
-            patternPaint.color = colors[r.nextInt(colors.size)]
-            val left = r.nextInt(96).toFloat()
-            val top = r.nextInt(96).toFloat()
-            val right = (left + 20 + r.nextInt(45)).coerceAtMost(120f)
-            val bottom = (top + 20 + r.nextInt(45)).coerceAtMost(120f)
-            c.drawOval(left, top, right, bottom, patternPaint)
+        val random = java.util.Random(42)
+        repeat(30) {
+            patternPaint.color = colors[random.nextInt(colors.size)]
+            val left = random.nextInt(96).toFloat()
+            val top = random.nextInt(96).toFloat()
+            c.drawOval(left, top, left + 18 + random.nextInt(42), top + 18 + random.nextInt(42), patternPaint)
         }
     }
 
     fun setActive(v: Boolean) {
         active = v
-        invalidate()
+        postInvalidateOnAnimation()
     }
 
     fun setMask(segmentation: SegmentationMask) {
@@ -155,13 +142,13 @@ private class CamouflageMaskView @JvmOverloads constructor(
         val buffer: ByteBuffer = segmentation.buffer
         buffer.rewind()
         for (i in pixels.indices) {
-            val a = (buffer.getFloat().coerceIn(0f, 1f) * 255f).toInt()
-            pixels[i] = (a shl 24)
+            val alpha = (buffer.getFloat().coerceIn(0f, 1f) * 255f).toInt()
+            pixels[i] = alpha shl 24
         }
         out.setPixels(pixels, 0, w, 0, 0, w, h)
-        val previousPending = pendingMask
+        val oldPending = pendingMask
         pendingMask = out
-        previousPending?.recycle()
+        oldPending?.recycle()
         postInvalidateOnAnimation()
     }
 
@@ -186,15 +173,29 @@ private class CamouflageMaskView @JvmOverloads constructor(
         if (!active) return
         val m = mask ?: return
         val layer = canvas.saveLayer(0f, 0f, width.toFloat(), height.toFloat(), null)
+        val src = centerCropSource(m.width, m.height, width, height)
         val dst = RectF(0f, 0f, width.toFloat(), height.toFloat())
-        val shader = BitmapShader(pattern, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
-        patternPaint.shader = shader
-        patternPaint.alpha = 235
+        patternPaint.shader = BitmapShader(pattern, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
+        patternPaint.alpha = 238
         canvas.drawRect(dst, patternPaint)
         patternPaint.shader = null
         paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
-        canvas.drawBitmap(m, null, dst, paint)
+        canvas.drawBitmap(m, src, dst, paint)
         paint.xfermode = null
         canvas.restoreToCount(layer)
+    }
+
+    private fun centerCropSource(sw: Int, sh: Int, dw: Int, dh: Int): Rect {
+        val sourceAspect = sw.toFloat() / sh.toFloat()
+        val destAspect = dw.toFloat() / dh.toFloat()
+        return if (sourceAspect > destAspect) {
+            val newW = (sh * destAspect).toInt().coerceAtLeast(1)
+            val left = (sw - newW) / 2
+            Rect(left, 0, left + newW, sh)
+        } else {
+            val newH = (sw / destAspect).toInt().coerceAtLeast(1)
+            val top = (sh - newH) / 2
+            Rect(0, top, sw, top + newH)
+        }
     }
 }
