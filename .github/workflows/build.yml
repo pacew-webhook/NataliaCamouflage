@@ -1,4 +1,4 @@
-name: Build Android APK - Kotlin/LiteRT Fix
+name: Build Android APK
 
 on:
   workflow_dispatch:
@@ -30,11 +30,11 @@ jobs:
         run: |
           set -euo pipefail
           gradle --version
-          gradle --no-daemon --refresh-dependencies :app:dependencies --configuration debugCompileClasspath > /tmp/dependencies.txt
+          gradle --no-daemon :app:dependencies --configuration debugCompileClasspath > /tmp/dependencies.txt
           grep -E "kotlin-stdlib|litert" /tmp/dependencies.txt | head -50 || true
 
       - name: Build Debug APK
-        run: gradle --no-daemon --refresh-dependencies --no-build-cache assembleDebug
+        run: gradle --no-daemon assembleDebug
 
       - name: Verify APK before packaging
         shell: bash
@@ -47,6 +47,13 @@ jobs:
             apksigner verify --verbose "$APK"
           fi
           echo "APK verified: $(du -h "$APK" | cut -f1)"
+      - name: Verify signing certificate (harus sama di setiap build)
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          keytool -printcert -jarfile "$APK" | grep -E "Owner|SHA256" || true
+
       - name: Verify APK exists
         shell: bash
         run: |
@@ -61,7 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           APK="app/build/outputs/apk/debug/app-debug.apk"
-          OUT="NataliaCamouflage-v2.0.0-debug.zip"
+          OUT="NataliaCamouflage-v3.1.0-debug.zip"
           rm -f "$OUT"
           zip -q -j "$OUT" "$APK"
           unzip -t "$OUT"
@@ -70,6 +77,16 @@ jobs:
       - name: Upload verified ZIP artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NataliaCamouflage-v2.0.0-debug
-          path: NataliaCamouflage-v2.0.0-debug.zip
+          name: NataliaCamouflage-v3.1.0-debug
+          path: NataliaCamouflage-v3.1.0-debug.zip
           if-no-files-found: error
+
+      - name: Upload build reports (jika build gagal)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports
+          path: |
+            app/build/reports
+            /tmp/dependencies.txt
+          if-no-files-found: ignore
