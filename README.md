@@ -1,4 +1,4 @@
-# Natalia Camouflage v1.1 – Live Camera Camouflage
+# Natalia Camouflage v1.4 – Live Camera Camouflage
 
 Based on v1.0 STARTUP-STABILITY-FIX.
 
