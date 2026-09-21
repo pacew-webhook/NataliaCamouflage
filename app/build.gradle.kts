@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.nataliacamo"
         minSdk = 26
         targetSdk = 35
-        versionCode = 44
-        versionName = "1.4"
+        versionCode = 45
+        versionName = "1.4.1"
     }
 
     compileOptions {
