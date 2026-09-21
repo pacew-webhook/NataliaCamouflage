@@ -7,12 +7,24 @@ android {
     namespace = "com.example.nataliacamo"
     compileSdk = 35
 
+    // Keystore debug tetap (dikomit di repo) supaya setiap build CI punya tanda tangan yang sama.
+    // Tanpa ini, tiap build GitHub Actions memakai keystore acak sehingga APK baru
+    // tidak bisa di-install sebagai update di atas versi lama.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     defaultConfig {
         applicationId = "com.example.nataliacamo"
         minSdk = 26
         targetSdk = 35
-        versionCode = 50
-        versionName = "2.0.0"
+        versionCode = 51
+        versionName = "3.1.0"
     }
 
     compileOptions {
