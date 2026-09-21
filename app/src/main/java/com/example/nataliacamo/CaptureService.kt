@@ -3,6 +3,7 @@ package com.example.nataliacamo
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.media.ImageReader
@@ -10,6 +11,7 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.*
 import android.provider.Settings
+import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -44,8 +46,19 @@ class CaptureService : Service(), LifecycleOwner {
     private var lastConfidence = 0f
     private var lastLabel = "normal"
     private var lastInferenceAt = 0L
+    private var lastSizeCheck = 0L
+    private var captureW = 0
+    private var captureH = 0
+    private val mainHandler = Handler(Looper.getMainLooper())
+    /** null = otomatis (AI), true/false = dipaksa lewat tombol TEST. */
+    @Volatile private var manual: Boolean? = null
 
     companion object {
+        private const val ROI_BASE_FLAGS =
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+
         const val START = "START"
         const val STOP = "STOP"
         const val CODE = "code"
@@ -56,12 +69,18 @@ class CaptureService : Service(), LifecycleOwner {
             private set
         @Volatile var confidence = 0f
             private set
+        @Volatile var camoProb = 0f
+            private set
+        @Volatile var manualMode: Boolean? = null
+            private set
         @Volatile var label = "normal"
             private set
 
         private var instance: CaptureService? = null
 
-        fun demo(v: Boolean) { instance?.setCamo(v) }
+        /** Paksa ON/OFF (bertahan sampai auto() dipanggil). */
+        fun demo(v: Boolean) { instance?.setManual(v) }
+        fun auto() { instance?.setManual(null) }
 
         fun updateSettings(context: Context, settings: DetectorSettings) {
             settings.save(context)
@@ -142,46 +161,19 @@ class CaptureService : Service(), LifecycleOwner {
             override fun onStop() { stopCapture() }
         }, Handler(Looper.getMainLooper()))
 
-        val dm = resources.displayMetrics
-        val maxDimension = 1280
-        val scale = minOf(1f, maxDimension.toFloat() / maxOf(dm.widthPixels, dm.heightPixels).toFloat())
-        val captureWidth = (dm.widthPixels * scale).toInt().coerceAtLeast(320)
-        val captureHeight = (dm.heightPixels * scale).toInt().coerceAtLeast(320)
+        val (captureWidth, captureHeight) = captureSize()
+        captureW = captureWidth
+        captureH = captureHeight
 
-        reader = ImageReader.newInstance(captureWidth, captureHeight, PixelFormat.RGBA_8888, 2)
-        captureThread = HandlerThread("NataliaCaptureV2").also { it.start() }
+        captureThread = HandlerThread("NataliaCaptureV3").also { it.start() }
         captureHandler = Handler(captureThread!!.looper)
-        reader?.setOnImageAvailableListener({ r ->
-            val image = try { r.acquireLatestImage() } catch (_: Throwable) { null }
-            if (image == null) return@setOnImageAvailableListener
-            if (!processing.compareAndSet(false, true)) {
-                image.close()
-                return@setOnImageAvailableListener
-            }
-            try {
-                val now = SystemClock.elapsedRealtime()
-                if (now - lastInferenceAt < 80L) return@setOnImageAvailableListener
-                lastInferenceAt = now
-                val d = activeDetector.process(image)
-                lastConfidence = d.confidence
-                lastLabel = d.label
-                confidence = d.confidence
-                label = d.label
-                updateStableState(d)
-                Handler(Looper.getMainLooper()).post { updateStatusText() }
-            } catch (_: Throwable) {
-                // A malformed frame never terminates the service.
-            } finally {
-                try { image.close() } catch (_: Throwable) {}
-                processing.set(false)
-            }
-        }, captureHandler)
+        reader = createReader(captureWidth, captureHeight)
 
         display = projection?.createVirtualDisplay(
-            "NataliaCamouflageV2",
+            "NataliaCamouflageV3",
             captureWidth,
             captureHeight,
-            dm.densityDpi,
+            resources.displayMetrics.densityDpi,
             0,
             reader!!.surface,
             null,
@@ -193,7 +185,101 @@ class CaptureService : Service(), LifecycleOwner {
         updateStatusText()
     }
 
+    /** Ukuran layar nyata saat ini (ikut rotasi), dikecilkan maks 1280 px. */
+    private fun captureSize(): Pair<Int, Int> {
+        val windowManager = getSystemService(WindowManager::class.java)
+        val realW: Int
+        val realH: Int
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val b = windowManager.maximumWindowMetrics.bounds
+            realW = b.width()
+            realH = b.height()
+        } else {
+            val m = DisplayMetrics()
+            @Suppress("DEPRECATION") windowManager.defaultDisplay.getRealMetrics(m)
+            realW = m.widthPixels
+            realH = m.heightPixels
+        }
+        val scale = minOf(1f, 1280f / maxOf(realW, realH).toFloat())
+        return (realW * scale).toInt().coerceAtLeast(320) to (realH * scale).toInt().coerceAtLeast(320)
+    }
+
+    private fun createReader(w: Int, h: Int): ImageReader {
+        val r = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
+        r.setOnImageAvailableListener({ ir -> handleImage(ir) }, captureHandler)
+        return r
+    }
+
+    private fun handleImage(r: ImageReader) {
+        val image = try { r.acquireLatestImage() } catch (_: Throwable) { null }
+        if (image == null) return
+        val activeDetector = detector
+        if (activeDetector == null || !processing.compareAndSet(false, true)) {
+            try { image.close() } catch (_: Throwable) {}
+            return
+        }
+        try {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastInferenceAt < 80L) return
+            lastInferenceAt = now
+            if (now - lastSizeCheck > 1000L) {
+                lastSizeCheck = now
+                mainHandler.post { resizeCapture() }
+            }
+            val d = activeDetector.process(image)
+            lastConfidence = d.confidence
+            lastLabel = d.label
+            confidence = d.confidence
+            camoProb = d.camoProb
+            label = d.label
+            updateStableState(d)
+            mainHandler.post { updateStatusText() }
+        } catch (_: Throwable) {
+            // A malformed frame never terminates the service.
+        } finally {
+            try { image.close() } catch (_: Throwable) {}
+            processing.set(false)
+        }
+    }
+
+    /** Dipanggil saat layar berputar: sesuaikan ukuran capture supaya crop ROI tetap benar. */
+    private fun resizeCapture() {
+        val disp = display ?: return
+        val (w, h) = captureSize()
+        if (w == captureW && h == captureH) return
+        val oldReader = reader
+        val newReader = createReader(w, h)
+        try {
+            disp.surface = newReader.surface
+            disp.resize(w, h, resources.displayMetrics.densityDpi)
+            reader = newReader
+            captureW = w
+            captureH = h
+            oldReader?.setOnImageAvailableListener(null, null)
+            if (oldReader != null) {
+                mainHandler.postDelayed({ try { oldReader.close() } catch (_: Throwable) {} }, 1500L)
+            }
+        } catch (_: Throwable) {
+            try { newReader.close() } catch (_: Throwable) {}
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (running) resizeCapture()
+    }
+
+    private fun setManual(v: Boolean?) {
+        manual = v
+        manualMode = v
+        onCount = 0
+        offCount = 0
+        if (v != null) setCamo(v)
+        updateStatusText()
+    }
+
     private fun updateStableState(d: Detection) {
+        if (manual != null) return
         val s = d.roi
         if (!camouflage) {
             offCount = 0
@@ -269,16 +355,26 @@ class CaptureService : Service(), LifecycleOwner {
             -1,
             -1,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            ROI_BASE_FLAGS or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.TOP or Gravity.START }
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            // Overlay harus menutupi seluruh layar (termasuk area notch) supaya
+            // koordinat kotak ROI sama dengan koordinat frame capture.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
         roiParams = params
         try { wm?.addView(view, params) } catch (_: Throwable) { roiOverlay = null }
     }
 
     private fun updateStatusText() {
         val state = if (camouflage) "ON" else "OFF"
-        overlay?.text = String.format("CAMOUFLAGE: %s  •  %.0f%%", state, lastConfidence * 100f)
+        val mode = if (manual != null) " (manual)" else ""
+        overlay?.text = String.format("CAMOUFLAGE: %s%s  •  camo %.0f%%  •  %s", state, mode, camoProb * 100f, lastLabel)
         roiOverlay?.setSettings(DetectorSettings.load(this))
     }
 
@@ -305,9 +401,9 @@ class CaptureService : Service(), LifecycleOwner {
         roiOverlay?.setEditMode(enabled)
         roiParams?.let { p ->
             p.flags = if (enabled) {
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                ROI_BASE_FLAGS
             } else {
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                ROI_BASE_FLAGS or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
             }
             try { wm?.updateViewLayout(roiOverlay, p) } catch (_: Throwable) {}
         }
@@ -316,8 +412,11 @@ class CaptureService : Service(), LifecycleOwner {
     private fun resetHysteresis() {
         onCount = 0
         offCount = 0
+        manual = null
+        manualMode = null
         setCamo(false)
         confidence = 0f
+        camoProb = 0f
         label = "normal"
     }
 
@@ -344,6 +443,8 @@ class CaptureService : Service(), LifecycleOwner {
         roiParams = null
         resetHysteresis()
         lastInferenceAt = 0L
+        captureW = 0
+        captureH = 0
         running = false
         stopping.set(false)
     }

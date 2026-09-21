@@ -61,13 +61,17 @@ class RoiOverlayView(context: Context) : View(context) {
         if (editMode) {
             canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), dimPaint)
         }
-        canvas.drawRect(r, borderPaint)
-        canvas.drawCircle(r.right, r.bottom, 14f, handlePaint)
-        canvas.drawCircle(r.right, r.bottom, 9f, borderPaint)
+        // Garis digambar DI LUAR area crop supaya tidak ikut tertangkap
+        // (overlay ikut masuk ke frame MediaProjection) dan mengganggu model.
+        val outer = RectF(r)
+        outer.inset(-borderPaint.strokeWidth, -borderPaint.strokeWidth)
+        canvas.drawRect(outer, borderPaint)
+        canvas.drawCircle(outer.right + 12f, outer.bottom + 12f, 14f, handlePaint)
+        canvas.drawCircle(outer.right + 12f, outer.bottom + 12f, 9f, borderPaint)
 
         val label = if (editMode) "ROI NATALIA • DRAG / RESIZE" else "ROI"
-        val y = (r.top - 12f).coerceAtLeast(28f)
-        canvas.drawText(label, r.left.coerceAtLeast(8f), y, textPaint)
+        val y = (outer.top - 12f).coerceAtLeast(28f)
+        canvas.drawText(label, outer.left.coerceAtLeast(8f), y, textPaint)
         if (editMode) {
             canvas.drawText(
                 "x=${settings.left} y=${settings.top} w=${settings.width} h=${settings.height}",
