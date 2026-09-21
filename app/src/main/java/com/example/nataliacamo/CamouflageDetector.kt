@@ -1,4 +1,5 @@
 package com.example.nataliacamo
+import android.graphics.PixelFormat
 
 import android.content.Context
 import android.graphics.ImageFormat
@@ -78,7 +79,7 @@ class CamouflageDetector(context: Context) : AutoCloseable {
 
     fun process(image: Image): Detection {
         val plane = image.planes.firstOrNull() ?: return Detection(false, 0f, "normal", settings)
-        if (image.format != ImageFormat.RGBA_8888 && image.format != ImageFormat.PRIVATE) {
+        if (image.format != PixelFormat.RGBA_8888 && image.format != ImageFormat.PRIVATE) {
             // MediaProjection uses RGBA_8888 in this project. PRIVATE is kept
             // for device compatibility, but an inaccessible plane will simply
             // fail safely below.

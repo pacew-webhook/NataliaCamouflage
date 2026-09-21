@@ -213,7 +213,7 @@ class MainActivity : ComponentActivity() {
         val label = TextView(this).apply { textSize = 14f }
         parent.addView(label)
         val bar = SeekBar(this).apply {
-            max = max - min
+            this.max = max - min
             progress = initial.coerceIn(min, max) - min
         }
         label.text = "$title: $initial"
