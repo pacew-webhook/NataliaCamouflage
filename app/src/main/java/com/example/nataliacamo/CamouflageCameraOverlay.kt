@@ -19,6 +19,7 @@ import com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions
 import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicReference
 
 /** Small live front-camera window with a segmented camouflage effect. */
 class CamouflageCameraOverlay(context: Context) : FrameLayout(context) {
@@ -32,7 +33,7 @@ class CamouflageCameraOverlay(context: Context) : FrameLayout(context) {
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private var provider: ProcessCameraProvider? = null
     private var segmenter: Segmenter? = null
-    private var analyzing = false
+    @Volatile private var analyzing = false
 
     init {
         addView(preview, LayoutParams(-1, -1))
@@ -71,25 +72,30 @@ class CamouflageCameraOverlay(context: Context) : FrameLayout(context) {
                     analyzing = true
                     try {
                         val image = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
-                        segmenter?.process(image)
-                            ?.addOnSuccessListener(executor) { mask -> maskView.setMask(mask) }
-                            ?.addOnCompleteListener(executor) {
-                                analyzing = false
-                                proxy.close()
+                        val task = segmenter?.process(image)
+                        if (task == null) {
+                            analyzing = false
+                            proxy.close()
+                        } else {
+                            task.addOnSuccessListener(executor) { mask ->
+                                // Exception di listener akan membuat aplikasi crash, jadi selalu ditangkap.
+                                try { maskView.setMask(mask) } catch (_: Throwable) {}
                             }
-                            ?: run {
+                            task.addOnCompleteListener(executor) {
                                 analyzing = false
-                                proxy.close()
+                                try { proxy.close() } catch (_: Throwable) {}
                             }
+                        }
                     } catch (_: Throwable) {
                         analyzing = false
-                        proxy.close()
+                        try { proxy.close() } catch (_: Throwable) {}
                     }
                 }
                 p.unbindAll()
                 p.bindToLifecycle(context as androidx.lifecycle.LifecycleOwner, selector, previewUseCase, analysis)
-            } catch (_: Throwable) {
-                // Camera is optional. Screen detection can continue without it.
+            } catch (t: Throwable) {
+                // Kamera opsional. Deteksi layar tetap berjalan tanpa kamera.
+                CaptureService.reportError("Kamera gagal dibuka (${t::class.java.simpleName}: ${t.message})")
             }
         }, ContextCompat.getMainExecutor(context))
     }
@@ -108,12 +114,16 @@ private class CamouflageMaskView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : View(context, attrs) {
-    @Volatile private var pendingMask: Bitmap? = null
+    // Serah-terima mask antar thread lewat AtomicReference. Bitmap TIDAK pernah
+    // di-recycle dari thread lain (sebelumnya bisa menyebabkan crash
+    // "trying to use a recycled bitmap").
+    private val pendingMask = AtomicReference<Bitmap?>(null)
     private var mask: Bitmap? = null
-    private var active = false
+    @Volatile private var active = false
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val patternPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val pattern = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
+    private var shader: BitmapShader? = null
 
     init {
         val c = Canvas(pattern)
@@ -126,6 +136,7 @@ private class CamouflageMaskView @JvmOverloads constructor(
             val top = random.nextInt(96).toFloat()
             c.drawOval(left, top, left + 18 + random.nextInt(42), top + 18 + random.nextInt(42), patternPaint)
         }
+        shader = BitmapShader(pattern, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
     }
 
     fun setActive(v: Boolean) {
@@ -137,26 +148,23 @@ private class CamouflageMaskView @JvmOverloads constructor(
         val w = segmentation.width
         val h = segmentation.height
         if (w <= 0 || h <= 0) return
-        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val pixels = IntArray(w * h)
         val buffer: ByteBuffer = segmentation.buffer
         buffer.rewind()
+        if (buffer.remaining() < w * h * 4) return
+        val pixels = IntArray(w * h)
         for (i in pixels.indices) {
             val alpha = (buffer.getFloat().coerceIn(0f, 1f) * 255f).toInt()
             pixels[i] = alpha shl 24
         }
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         out.setPixels(pixels, 0, w, 0, 0, w, h)
-        val oldPending = pendingMask
-        pendingMask = out
-        oldPending?.recycle()
+        pendingMask.set(out) // bitmap lama dibiarkan dibersihkan GC
         postInvalidateOnAnimation()
     }
 
     fun clearMask() {
+        pendingMask.set(null)
         post {
-            pendingMask?.recycle()
-            pendingMask = null
-            mask?.recycle()
             mask = null
             invalidate()
         }
@@ -164,25 +172,25 @@ private class CamouflageMaskView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        pendingMask?.let { next ->
-            pendingMask = null
-            val old = mask
-            mask = next
-            old?.recycle()
+        try {
+            pendingMask.getAndSet(null)?.let { mask = it }
+            if (!active) return
+            val m = mask ?: return
+            if (m.isRecycled || width <= 0 || height <= 0) return
+            val layer = canvas.saveLayer(0f, 0f, width.toFloat(), height.toFloat(), null)
+            val src = centerCropSource(m.width, m.height, width, height)
+            val dst = RectF(0f, 0f, width.toFloat(), height.toFloat())
+            patternPaint.shader = shader
+            patternPaint.alpha = 238
+            canvas.drawRect(dst, patternPaint)
+            patternPaint.shader = null
+            paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+            canvas.drawBitmap(m, src, dst, paint)
+            paint.xfermode = null
+            canvas.restoreToCount(layer)
+        } catch (_: Throwable) {
+            // Gagal menggambar satu frame tidak boleh membuat aplikasi crash.
         }
-        if (!active) return
-        val m = mask ?: return
-        val layer = canvas.saveLayer(0f, 0f, width.toFloat(), height.toFloat(), null)
-        val src = centerCropSource(m.width, m.height, width, height)
-        val dst = RectF(0f, 0f, width.toFloat(), height.toFloat())
-        patternPaint.shader = BitmapShader(pattern, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
-        patternPaint.alpha = 238
-        canvas.drawRect(dst, patternPaint)
-        patternPaint.shader = null
-        paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
-        canvas.drawBitmap(m, src, dst, paint)
-        paint.xfermode = null
-        canvas.restoreToCount(layer)
     }
 
     private fun centerCropSource(sw: Int, sh: Int, dw: Int, dh: Int): Rect {

@@ -71,6 +71,10 @@ class CaptureService : Service(), LifecycleOwner {
             private set
         @Volatile var camoProb = 0f
             private set
+        /** Pesan error terakhir (ditampilkan di panel), null jika tidak ada. */
+        @Volatile var lastError: String? = null
+
+        fun reportError(message: String) { lastError = message }
         @Volatile var manualMode: Boolean? = null
             private set
         @Volatile var label = "normal"
@@ -101,6 +105,13 @@ class CaptureService : Service(), LifecycleOwner {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             START -> {
+                // WAJIB: startForeground harus dipanggil untuk SETIAP startForegroundService(),
+                // termasuk saat capture sudah jalan / gagal. Kalau tidak, aplikasi crash
+                // (ForegroundServiceDidNotStartInTimeException).
+                if (!ensureForeground()) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
                 startCapture(intent)
             }
@@ -109,8 +120,53 @@ class CaptureService : Service(), LifecycleOwner {
         return START_NOT_STICKY
     }
 
+    /** Jadikan service foreground. Tipe kamera hanya dipakai jika izin kamera sudah diberikan. */
+    private fun ensureForeground(): Boolean {
+        val hasCamera = checkSelfPermission(android.Manifest.permission.CAMERA) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                var type = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                if (hasCamera) type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                startForeground(7, notification(), type)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(7, notification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            } else {
+                startForeground(7, notification())
+            }
+            return true
+        } catch (_: Throwable) {
+            // Cadangan: tanpa tipe kamera.
+            return try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(7, notification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+                } else {
+                    startForeground(7, notification())
+                }
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+    }
+
     private fun startCapture(intent: Intent) {
+        try {
+            startCaptureInner(intent)
+        } catch (t: Throwable) {
+            fail("Start capture gagal", t)
+        }
+    }
+
+    private fun fail(message: String, t: Throwable?) {
+        lastError = message + (t?.let { " (${it::class.java.simpleName}: ${it.message})" } ?: "")
+        try { stopCapture() } catch (_: Throwable) {}
+        stopSelf()
+    }
+
+    private fun startCaptureInner(intent: Intent) {
         if (running) return
+        lastError = null
         val code = intent.getIntExtra(CODE, Activity.RESULT_CANCELED)
         val data = if (Build.VERSION.SDK_INT >= 33) {
             intent.getParcelableExtra(DATA, Intent::class.java)
@@ -118,34 +174,14 @@ class CaptureService : Service(), LifecycleOwner {
             @Suppress("DEPRECATION") intent.getParcelableExtra(DATA)
         }
         if (code != Activity.RESULT_OK || data == null) {
-            stopSelf()
-            return
-        }
-
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                startForeground(
-                    7,
-                    notification(),
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or
-                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-                )
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(
-                    7,
-                    notification(),
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                )
-            } else startForeground(7, notification())
-        } catch (_: Throwable) {
-            stopSelf()
+            fail("Izin screen capture ditolak", null)
             return
         }
 
         val activeDetector = try {
             detector ?: CamouflageDetector(applicationContext).also { detector = it }
-        } catch (_: Throwable) {
-            stopSelf()
+        } catch (t: Throwable) {
+            fail("Model AI gagal dimuat", t)
             return
         }
         activeDetector.updateSettings(DetectorSettings.load(this))
@@ -154,7 +190,7 @@ class CaptureService : Service(), LifecycleOwner {
         val manager = getSystemService(MediaProjectionManager::class.java)
         projection = try { manager.getMediaProjection(code, data) } catch (_: Throwable) { null }
         if (projection == null) {
-            stopSelf()
+            fail("MediaProjection tidak tersedia", null)
             return
         }
         projection?.registerCallback(object : MediaProjection.Callback() {
@@ -332,7 +368,8 @@ class CaptureService : Service(), LifecycleOwner {
             wm?.addView(root, cameraParams)
             camera.start()
             makeRoiOverlay()
-        } catch (_: Throwable) {
+        } catch (t: Throwable) {
+            lastError = "Overlay gagal dibuat (${t::class.java.simpleName}: ${t.message})"
             cameraOverlay?.stop()
             cameraOverlay = null
             overlayContainer = null

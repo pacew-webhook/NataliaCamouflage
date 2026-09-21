@@ -1,6 +1,9 @@
 package com.example.nataliacamo
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
@@ -17,6 +20,8 @@ import androidx.core.content.ContextCompat
 /** V3 control panel. Designed to be usable directly from the phone. */
 class MainActivity : ComponentActivity() {
     private lateinit var status: TextView
+    private lateinit var crashBox: LinearLayout
+    private lateinit var crashText: TextView
     private lateinit var detectorState: TextView
     private lateinit var roiSummary: TextView
     private lateinit var thresholdValue: TextView
@@ -88,6 +93,39 @@ class MainActivity : ComponentActivity() {
             text = "Saat Natalia kamuflase → wajahmu di kamera ikut berkamuflase"
             textSize = 14f
         })
+
+        crashText = TextView(this).apply {
+            textSize = 11f
+            setTextIsSelectable(true)
+            setPadding(0, 8, 0, 8)
+        }
+        crashBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 16, 0, 8)
+            visibility = android.view.View.GONE
+            addView(TextView(this@MainActivity).apply {
+                text = "Crash terakhir (salin lalu kirim ke saya):"
+                textSize = 15f
+            })
+            addView(crashText)
+            addView(Button(this@MainActivity).apply {
+                text = "Salin log crash"
+                setOnClickListener {
+                    val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("crash", crashText.text))
+                    Toast.makeText(this@MainActivity, "Log disalin", Toast.LENGTH_SHORT).show()
+                }
+            })
+            addView(Button(this@MainActivity).apply {
+                text = "Hapus log crash"
+                setOnClickListener {
+                    CrashLog.clear(this@MainActivity)
+                    visibility = android.view.View.GONE
+                    crashBox.visibility = android.view.View.GONE
+                }
+            })
+        }
+        root.addView(crashBox)
 
         status = TextView(this).apply { textSize = 18f; setPadding(0, 24, 0, 4) }
         detectorState = TextView(this).apply { textSize = 16f }
@@ -307,7 +345,11 @@ class MainActivity : ComponentActivity() {
             settings = DetectorSettings.load(this)
             sliderSyncs.forEach { it() }
         }
-        status.text = if (CaptureService.running) "Capture: ACTIVE" else "Capture: READY"
+        status.text = (if (CaptureService.running) "Capture: ACTIVE" else "Capture: READY") +
+            (CaptureService.lastError?.let { "\n⚠ $it" } ?: "")
+        val crash = CrashLog.read(this)
+        if (crash != null && crashText.text.toString() != crash) crashText.text = crash
+        crashBox.visibility = if (crash != null) android.view.View.VISIBLE else android.view.View.GONE
         val manualText = when (CaptureService.manualMode) {
             true -> " • MANUAL ON"
             false -> " • MANUAL OFF"
