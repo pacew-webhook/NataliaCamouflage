@@ -2,6 +2,11 @@
 
 Android Studio project for on-device Natalia camouflage detection.
 
+## Catatan install "paket tidak valid"
+- Keystore debug kustom (`app/debug.keystore`) DIHAPUS untuk sementara supaya AGP kembali mengatur signing debug secara otomatis, seperti proyek asli. Ini untuk menyingkirkan satu kemungkinan penyebab APK tidak bisa diinstal.
+- Konsekuensi: setiap build baru dari CI punya tanda tangan berbeda lagi, jadi **uninstall versi lama dulu** sebelum install yang baru.
+- Kalau tetap gagal install setelah ini, penyebabnya di luar signing; perlu log `adb install` atau logcat saat instalasi untuk mendiagnosis lebih lanjut.
+
 ## V3.2 (akar masalah deteksi)
 - **Bug utama:** model `natalia_camouflage.tflite` (MobileNetV2 Keras) SUDAH menormalisasi input sendiri (`x * 1/127.5 - 1` di dua op pertama graph-nya), jadi input harus **0..255 mentah**. Versi sebelumnya mengirim `r/127.5 - 1` sehingga input dinormalisasi dua kali -> hampir konstan -> model selalu menjawab "normal" (~96%) apa pun isi layar. Sekarang default 0..255 mentah.
 - Multi-crop: tiap frame dicoba crop ROI, layar penuh, dan ROI besar; skor camouflage tertinggi dipakai. Nama crop pemenang tampil di overlay.
